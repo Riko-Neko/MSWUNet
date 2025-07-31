@@ -1,0 +1,12 @@
+# 1. Ignore all __pycache__ directories (anywhere in the project)
+__pycache__/
+
+# 2. Ignore all .DS_Store files (macOS metadata files)
+.DS_Store
+
+# 3. Ignore 'abandoned/' and 'archived/' folders located in the project root
+/abandoned/
+/archived/
+
+# 4. Ignore all .pth files under checkpoints/*/ directories, but keep other files
+checkpoints/*/*.pth

@@ -1,6 +1,11 @@
-torch>=1.10
-setigen
-torch-wavelets
-numpy
+torch>=1.1.0
+setigen~=2.7.0
+numpy~=2.2.5
 matplotlib
-tqdm
+tqdm~=4.67.1
+pywavelets~=1.8.0
+torchinfo~=1.8.0
+pandas~=2.2.3
+astropy~=7.0.0
+scipy~=1.15.3
+torchmetrics~=1.2.1
