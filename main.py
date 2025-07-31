@@ -1,3 +1,49 @@
+"""
+This file contains the main execution code for the SETI data.
+
+Use "
+find . -type f -name "*.png" \
+  | grep -v "^./abandoned/" \
+  | grep -v "^./archived/" \
+  | sort \
+  | awk -F/ '
+    {
+      dir = $(1);
+      for (i = 2; i < NF; ++i) dir = dir "/" $i;
+      file_map[dir]++;
+      if (file_map[dir] <= 3) print $0;
+    }
+  ' \
+  | xargs git add
+  " to sort and add pngs.
+
+Use "
+git diff --cached --name-only \
+  | grep "\.png$" \
+  | grep -v "/abandoned/" \
+  | grep -v "/archived/" \
+  | while IFS= read -r file; do
+      dir=$(dirname "$file")
+      echo "$dir/$file"
+    done \
+  | sort \
+  | awk -F/ '
+    {
+      folder = $1;
+      file_map[folder]++;
+      if (file_map[folder] <= 3) {
+        keep[$0] = 1;
+      } else {
+        print $0;
+      }
+    }
+  ' \
+  | xargs git restore --staged
+  “ to re-add required pngs.
+
+Make sure you do this before committing.
+
+"""
 import os
 import time
 from pathlib import Path
