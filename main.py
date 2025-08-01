@@ -14,32 +14,12 @@ find . -type f -name "*.png" \
       if (file_map[dir] <= 3) print $0;
     }
   ' \
-  | xargs git add
+  | xargs git add -f
   " to sort and add pngs.
 
 Use "
-git diff --cached --name-only \
-  | grep "\.png$" \
-  | grep -v "/abandoned/" \
-  | grep -v "/archived/" \
-  | while IFS= read -r file; do
-      dir=$(dirname "$file")
-      echo "$dir/$file"
-    done \
-  | sort \
-  | awk -F/ '
-    {
-      folder = $1;
-      file_map[folder]++;
-      if (file_map[folder] <= 3) {
-        keep[$0] = 1;
-      } else {
-        print $0;
-      }
-    }
-  ' \
-  | xargs git restore --staged
-  “ to re-add required pngs.
+git diff --cached --name-only | grep '\.png$' | xargs git restore --staged
+  “ to delete unwanted pngs.
 
 Make sure you do this before committing.
 

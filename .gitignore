@@ -4,7 +4,10 @@ __pycache__/
 .DS_Store
 /abandoned/
 /archived/
-checkpoints/*/*.pth
 
-# Dev
+# resources
+checkpoints/*/*.pth
+*.png
+
+# dev
 model/DWTNet.py
