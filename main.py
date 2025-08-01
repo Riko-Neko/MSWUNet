@@ -19,7 +19,7 @@ find . -type f -name "*.png" \
 
 Use "
 git diff --cached --name-only | grep '\.png$' | xargs git restore --staged
-  “ to delete unwanted pngs.
+  “ to delete all pngs.
 
 Make sure you do this before committing.
 
