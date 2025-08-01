@@ -21,7 +21,7 @@ batch_size = 128  # Batch size
 num_workers = 0   # Number of loader threads
 num_epochs = 3000
 recompute = False  # Whether to recompute statistics
-load_model = False  # Whether to load a pre-trained model
+load_model = False  # Whether to load a test-trained model
 model_type = 'resnet'  # Model type: 'vae' or 'resnet'
 device_id = 0  # GPU device ID
 
@@ -82,7 +82,7 @@ if __name__ == '__main__':
     model = MODEL_MAP[model_type][0](**MODEL_MAP[model_type][1]).to(device)
     weights_path = os.path.join('weights', MODEL_MAP[model_type][2])
     if load_model:
-        print(f"Loading pre-trained model {weights_path}")
+        print(f"Loading test-trained model {weights_path}")
         if os.path.exists(weights_path):
             model.load_state_dict(torch.load(weights_path, map_location = device))
         else:

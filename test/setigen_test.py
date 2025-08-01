@@ -100,7 +100,7 @@ if plot:
     plt.tight_layout()
 
     if plot_filename:
-        plot_o_path = Path('plot/tmp/') / Path(plot_filename).with_suffix('.png')
+        plot_o_path = Path('/plot/tmp/') / Path(plot_filename).with_suffix('.png')
         plt.savefig(plot_o_path, dpi=480, bbox_inches='tight')
         print(f"Plot saved to {plot_o_path}")
 
