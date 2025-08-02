@@ -99,7 +99,6 @@ def create_blimpy_compatible_h5(dataset, save_path, fch1=1420e6, foff=-0.1e6, ra
 
 
 if __name__ == "__main__":
-    # 创建测试数据集
     test_dataset = DynamicSpectrumDataset(
         tchans=128, fchans=1024, df=7.5, dt=10.0,
         drift_min=-1.0, drift_max=1.0,
@@ -109,7 +108,6 @@ if __name__ == "__main__":
         noise_std_min=0.05, noise_std_max=0.1
     )
 
-    # 生成测试文件
     create_blimpy_compatible_h5(
         dataset=test_dataset,
         save_path="./test_out/setigen_sim/waterfall.h5",

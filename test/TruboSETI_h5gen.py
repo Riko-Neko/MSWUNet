@@ -1,22 +1,17 @@
 """
 This is a test script for the turbo_seti package. It searches for Doppler shifts in BLIS692NS_EV data.
 
-      属性                 描述                 示例值
-    DIMENSION_LABELS    数据维度的标签         "['frequency', 'feed_id', 'time']"
-    fch1                起始频率（MHz）        8421.386717353016
-    foff                频率分辨率（MHz）      -2.7939677238464355e-06
-    nchans              频率通道数             1048576
-    tsamp               时间采样间隔（秒）      18.25361100
-    tstart              观测开始时间（MJD）     57650.78209490741
-    source_name         源名称                Voyager1
-    telescope_id        望远镜ID              6
+OPPS! This script is outdated and needs to be updated to work with the latest turbo_seti version.
 
 """
 import glob
 import os
+import tempfile
 import time
+import traceback
 
 import h5py
+import numpy as np
 from blimpy import Waterfall
 from turbo_seti.find_doppler.find_doppler import FindDoppler
 
@@ -47,6 +42,10 @@ def inspect_h5_structure(h5_file):
 
                 obj.visit(visit_data)
 
+            print("\n[Info] Attributes of ‘data’:")
+            for key, value in obj.attrs.items():
+                print(f"{key}: {value}")
+
 
 def search_doppler(h5_path_or_dir, output_dir='./test_out/truboseti_blis692ns'):
     os.makedirs(output_dir, exist_ok=True)
@@ -73,7 +72,7 @@ def search_doppler(h5_path_or_dir, output_dir='./test_out/truboseti_blis692ns'):
 
         inspect_h5_structure(h5_file)
 
-        wf = Waterfall(filename=h5_file)
+        wf = load_waterfall_compatibly(h5_file)
         print("[Info] Waterfall object created", wf.header)
         wf.info()
 
@@ -90,10 +89,56 @@ def search_doppler(h5_path_or_dir, output_dir='./test_out/truboseti_blis692ns'):
         print(f"\n[Success] FindDoppler.search() completed in {elapsed_time:.2f} seconds for: {h5_file}")
 
 
+def load_waterfall_compatibly(h5_file):
+    """
+    Attempts to load the HDF5 file using Waterfall.
+    If the file cannot be loaded directly, rewraps the 'data' dataset into a new HDF5 file.
+    Returns a Waterfall object or None if both attempts fail.
+    """
+
+    print(f"\n[Info] Trying to load Waterfall file: {h5_file}")
+    try:
+        wf = Waterfall(h5_file)
+        _ = wf.container  # 强制访问底层 container，确保 header 读取
+        print("[Info] Successfully loaded with Waterfall.")
+        return wf
+    except Exception as e:
+        print(f"[Warning] Waterfall could not load original h5: {e}")
+        traceback.print_exc()
+    except BaseException as e:
+        print(f"[Critical] Waterfall triggered a critical error: {e}")
+        traceback.print_exc()
+
+    print("[Info] Trying to wrap 'data' into a new .h5...")
+
+    # 尝试包装为新 h5
+    tmp_dir = tempfile.mkdtemp()
+    wrapped_file = os.path.join(tmp_dir, "wrapped_data.h5")
+    try:
+        with h5py.File(h5_file, 'r') as f_in:
+            with h5py.File(wrapped_file, 'w') as f_out:
+                f_out.create_dataset('data', data=np.array(f_in['data']))
+                if 'mask' in f_in:
+                    f_out.create_dataset('mask', data=np.array(f_in['mask']))
+
+                # Add required attributes for Waterfall to accept the file
+                f_out.attrs['CLASS'] = b'FILTERBANK'
+                f_out.attrs['VERSION'] = b'1.0'
+                f_out.attrs['TELESCOP'] = b'GBT'
+
+        wf = Waterfall(wrapped_file)
+        _ = wf.container  # again force reading
+        print("[Info] Successfully loaded wrapped .h5 with Waterfall.")
+        return wf
+    except Exception as e2:
+        print(f"[Error] Failed to load wrapped .h5: {e2}")
+        traceback.print_exc()
+        return None
+
 
 if __name__ == '__main__':
-    # 单文件搜索
-    search_doppler('test_out/setigen_sim/waterfall.h5')
+    # Search for Doppler shifts in a single .h5 file
+    # search_doppler('test_out/setigen_sim/waterfall.h5')
 
-    # 目录搜索（递归）
+    # Search for Doppler shifts in a directory of .h5 files
     search_doppler('../data/BLIS692NS_EV/HIP17147')
