@@ -5,18 +5,18 @@ from turbo_seti.find_doppler.find_doppler import FindDoppler
 
 
 def print_waterfall_debug_info(wf):
-    print("[DEBUG] Waterfall object information:")
+    print("[\033[34mDEBUG\033[0m]] Waterfall object information:")
     print(f"  Filename: {getattr(wf, 'filename', 'N/A')}")
     print(f"  File extension: {getattr(wf, 'ext', 'N/A')}")
 
-    print("\n[DEBUG] Container-level metadata:")
+    print("\n[\033[34mDEBUG\033[0m] Container-level metadata:")
     print(f"  Number of integrations in file: {getattr(wf, 'n_ints_in_file', 'N/A')}")
     print(f"  File shape (time, frequency): {getattr(wf, 'file_shape', 'N/A')}")
     print(f"  File size (bytes): {getattr(wf, 'file_size_bytes', 'N/A')}")
     print(f"  Selection shape: {getattr(wf, 'selection_shape', 'N/A')}")
     print(f"  Number of frequency channels: {getattr(wf, 'n_channels_in_file', 'N/A')}")
 
-    print("\n[DEBUG] Header information:")
+    print("\n[\033[34mDEBUG\033[0m] Header information:")
     header = getattr(wf, 'header', None)
     if header:
         for key, value in header.items():
@@ -36,24 +36,26 @@ def doppler_search_fil(fil_file: str, out_dir: str = './test_out/truboseti_blis6
     - drift_rate: float, maximum drift rate (Hz/s), default is 2.0
     """
     if not os.path.exists(fil_file):
-        print(f"[Error] File not found: {fil_file}")
+        print(f"[\033[31mError\033[0m] File not found: {fil_file}")
         return
 
     if not fil_file.endswith('.fil'):
-        print(f"[Error] Invalid file type: {fil_file} is not a .fil file")
+        print(f"[\033[31mError\033[0m] Invalid file type: {fil_file} is not a .fil file")
         return
 
     if out_dir is None:
         out_dir = os.path.dirname(fil_file)
 
-    print(f"[Info] Starting Doppler search for: {fil_file}")
-    print(f"[Info] Output directory: {out_dir}")
+    print(f"[\033[32mInfo\033[0m] Starting Doppler search for: {fil_file}")
+    print(f"[\033[32mInfo\033[0m] Output directory: {out_dir}")
 
     # Create Waterfall object
     wf = Waterfall(fil_file)
+    print("[\033[32mInfo\033[0m] Waterfall object created", wf.header)
+    wf.info()
     if check:
         print_waterfall_debug_info(wf)
-        input("\n[Info] Press Enter to continue...")
+        input("\n[\033[32mInfo\033[0m] Press Enter to continue...")
 
     # Perform Doppler search
     doppler = FindDoppler(fil_file,
@@ -63,7 +65,7 @@ def doppler_search_fil(fil_file: str, out_dir: str = './test_out/truboseti_blis6
                           **kwargs)
     doppler.search()
 
-    print(f"[Success] Search complete for {fil_file}")
+    print(f"[\033[32mInfo\033[0m] Search complete for {fil_file}")
 
 
 if __name__ == "__main__":

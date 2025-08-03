@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 import matplotlib
@@ -219,27 +220,27 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
 
     # 可视化（可选）
     if plot:
-        plt.figure(figsize=(12, 36))
+        plt.figure(figsize=(36, 36))
         if ascending:
             freqs = fch1.to(u.Hz).value + np.arange(fchans) * df.to(u.Hz).value
         else:
             freqs = fch1.to(u.Hz).value - np.arange(fchans) * df.to(u.Hz).value
-        plt.subplot(311)
+        plt.subplot(221)
         plt.imshow(clean_spec, aspect='auto', origin='lower',
                    extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
         plt.title('Clean Signal Spectrum')
         plt.colorbar(label='Intensity')
-        plt.subplot(312)
+        plt.subplot(222)
         plt.imshow(signal_spec, aspect='auto', origin='lower',
                    extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
         plt.title('Signal Spectrum with Noise')
         plt.colorbar(label='Intensity')
-        plt.subplot(313)
+        plt.subplot(223)
         plt.imshow(noisy_spec, aspect='auto', origin='lower',
                    extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
         plt.title('Noisy Spectrum with RFI')
         plt.colorbar(label='Intensity')
-        plt.subplot(314)
+        plt.subplot(224)
         plt.imshow(rfi_mask, aspect='auto', origin='lower',
                    extent=[freqs[0], freqs[-1], 0, tchans], cmap='Reds')
         plt.title('RFI Mask')
@@ -251,21 +252,41 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
             out_path = Path(plot_filename)
             plt.savefig(out_path, dpi=480)
             print(f"Plot saved to {out_path}")
-        plt.show()
     return signal_spec, clean_spec, noisy_spec, rfi_mask
 
 
 if __name__ == "__main__":
     import os
 
-    os.makedirs("./plot", exist_ok=True)
+    out_dir = "./plot/sim_raw/"
+    os.makedirs(out_dir, exist_ok=True)
 
-    signal_conf = [{
-        'f_index': 10,
-        'drift_rate': 15,  # Hz/s
-        'snr': 40,
+    signals = [{
+        'f_index': 1024,
+        'drift_rate': 0.1,  # Hz/s
+        'snr': 10,
+        'width': 20,  # Hz
+        'path': 'squared',
+        'period': 10,
+        'amplitude': 50,
+        't_profile': 'constant',
+        'f_profile': 'gaussian'
+    }, {
+        'f_index': 2048,
+        'drift_rate': -1,  # Hz/s
+        'snr': 10,
         'width': 20,  # Hz
         'path': 'sine',
+        'period': 10,
+        'amplitude': 50,
+        't_profile': 'constant',
+        'f_profile': 'gaussian'
+    }, {
+        'f_index': 3072,
+        'drift_rate': 2,  # Hz/s
+        'snr': 10,
+        'width': 20,  # Hz
+        'path': 'constant',
         'period': 10,
         'amplitude': 50,
         't_profile': 'constant',
@@ -283,18 +304,18 @@ if __name__ == "__main__":
     }
 
     sim_dynamic_spec_seti(
-        fchans=224,
-        tchans=224,
-        df=1.0,
+        fchans=4096,
+        tchans=512,
+        df=7.5,
         dt=1.0,
         fch1=1.42e9,
         ascending=True,
-        signals=signal_conf,
+        signals=signals,
         noise_x_mean=0.0,
         noise_x_std=0.1,
         noise_type='normal',
         rfi_params=rfi_conf,
         seed=42,
         plot=True,
-        plot_filename="./plot/sim_c/sim.png"
+        plot_filename=f"{out_dir}/sim_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
     )
