@@ -99,11 +99,11 @@ def create_blimpy_compatible_h5(dataset, save_path, fch1=1420e6, foff=-0.1e6, ra
 
 
 if __name__ == "__main__":
-    fchans = 4096
-    tchans = 512
+    fchans = 1024
+    tchans = 128
     df = 7.5
     dt = 1.0
-    bandwidth = df * fchans  # MHz
+    bandwidth = df * fchans / 1e6  # MHz
     test_dataset = DynamicSpectrumDataset(
         tchans=tchans, fchans=fchans, df=df, dt=dt,
         drift_min=-1.0, drift_max=1.0,

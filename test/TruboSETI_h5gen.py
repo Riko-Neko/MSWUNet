@@ -46,8 +46,9 @@ def inspect_h5_structure(h5_file):
                 print(f"{key}: {value}")
 
 
-def search_doppler_h5(h5_path_or_dir, output_dir='./test_out/truboseti_blis692ns', check=True):
-    os.makedirs(output_dir, exist_ok=True)
+def search_doppler_h5(h5_path_or_dir, out_dir='./test_out/truboseti_blis692ns', drift_rate: float = 2.0,
+                      snr: float = 10, check=True, **kwargs):
+    os.makedirs(out_dir, exist_ok=True)
 
     if os.path.isfile(h5_path_or_dir) and h5_path_or_dir.endswith('.h5'):
         h5_files = [h5_path_or_dir]
@@ -81,20 +82,37 @@ def search_doppler_h5(h5_path_or_dir, output_dir='./test_out/truboseti_blis692ns
 
         print("[\033[32mInfo\033[0m] Starting FindDoppler search ...")
         t1 = time.time()
-        fdop = FindDoppler(
-            datafile=h5_file,
-            max_drift=4,
-            snr=10,
-            out_dir=output_dir
-        )
+        fdop = FindDoppler(h5_file,
+                           max_drift=drift_rate,
+                           snr=snr,
+                           out_dir=out_dir,
+                           **kwargs)
         fdop.search()
         elapsed_time = time.time() - t1
         print(f"\n[\033[32mInfo\033[0m] FindDoppler.search() completed in {elapsed_time:.2f} seconds for: {h5_file}")
 
 
 if __name__ == '__main__':
-    fil_file = max(glob.glob("test_out/setigen_wf_sim/wf_sim_*.h5"), key=os.path.getctime)
+    h5_file = max(glob.glob("test_out/setigen_wf_sim/wf_sim_*.h5"), key=os.path.getctime)
     # fil_file = '../data/BLIS692NS/BLIS692NS_EV/HIP17147/spliced_blc0001020304050607_guppi_57523_69379_HIP17147_0015.gpuspec.0000.h5'
-    output_dir = './test_out/truboseti_blis692ns'
+    out_dir = f'./test_out/truboseti_blis692ns/{os.path.splitext(os.path.basename(h5_file))[0]}'
+    drift_rate = 2.0
+    snr = 10
+    check = True
 
-    search_doppler_h5(fil_file, output_dir, check=True)
+    # Extended options
+    kwargs = {
+        'min_drift': 0.00001,
+        'coarse_chans': None,
+        'obs_info': None,
+        'flagging': False,
+        'n_coarse_chan': None,
+        'kernels': None,
+        'gpu_backend': False,
+        'gpu_id': 0,
+        'precision': 1,
+        'append_output': False,
+        'blank_dc': True,
+    }
+
+    search_doppler_h5(h5_file, out_dir=out_dir, drift_rate=drift_rate, snr=snr, check=check, **kwargs)
