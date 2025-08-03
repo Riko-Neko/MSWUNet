@@ -47,7 +47,7 @@ def inspect_h5_structure(h5_file):
                 print(f"{key}: {value}")
 
 
-def search_doppler(h5_path_or_dir, output_dir='./test_out/truboseti_blis692ns'):
+def search_doppler(h5_path_or_dir, output_dir='./test_out/truboseti_blis692ns', rescue=False):
     os.makedirs(output_dir, exist_ok=True)
 
     # 判断是文件还是目录
@@ -71,8 +71,10 @@ def search_doppler(h5_path_or_dir, output_dir='./test_out/truboseti_blis692ns'):
         print(f"\n[Info] Processing file: {h5_file}")
 
         inspect_h5_structure(h5_file)
-
-        wf = load_waterfall_compatibly(h5_file)
+        if rescue:
+            wf = load_waterfall_compatibly(h5_file)
+        else:
+            wf = Waterfall(h5_file)
         print("[Info] Waterfall object created", wf.header)
         wf.info()
 
@@ -118,6 +120,10 @@ def load_waterfall_compatibly(h5_file):
         with h5py.File(h5_file, 'r') as f_in:
             with h5py.File(wrapped_file, 'w') as f_out:
                 f_out.create_dataset('data', data=np.array(f_in['data']))
+
+                for key, value in f_out['data'].attrs.items():
+                    f_out['data'].attrs[key] = value
+
                 if 'mask' in f_in:
                     f_out.create_dataset('mask', data=np.array(f_in['mask']))
 
@@ -141,4 +147,4 @@ if __name__ == '__main__':
     # search_doppler('test_out/setigen_sim/waterfall.h5')
 
     # Search for Doppler shifts in a directory of .h5 files
-    search_doppler('../data/BLIS692NS_EV/HIP17147')
+    search_doppler('../data/BLIS692NS_EV/HIP17147', rescue=False)
