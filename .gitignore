@@ -11,6 +11,8 @@ checkpoints/*/*.pth
 *.h5
 *.csv
 *.fil
+*.log
+*.dat
 
 # dev
 model/DWTNet.py

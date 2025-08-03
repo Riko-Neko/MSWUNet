@@ -1,7 +1,7 @@
 """
 This is a test script for the turbo_seti package. It searches for Doppler shifts in BLIS692NS_EV data.
 
-OPPS! This script is outdated and needs to be updated to work with the latest turbo_seti version.
+OPPS! This script may be outdated and needs to be updated to work with the latest turbo_seti version.
 
 """
 import glob
@@ -47,7 +47,7 @@ def inspect_h5_structure(h5_file):
                 print(f"{key}: {value}")
 
 
-def search_doppler(h5_path_or_dir, output_dir='./test_out/truboseti_blis692ns', rescue=False):
+def search_doppler_h5(h5_path_or_dir, output_dir='./test_out/truboseti_blis692ns', rescue=False):
     os.makedirs(output_dir, exist_ok=True)
 
     # 判断是文件还是目录
@@ -143,8 +143,5 @@ def load_waterfall_compatibly(h5_file):
 
 
 if __name__ == '__main__':
-    # Search for Doppler shifts in a single .h5 file
-    # search_doppler('test_out/setigen_sim/waterfall.h5')
-
-    # Search for Doppler shifts in a directory of .h5 files
-    search_doppler('../data/BLIS692NS_EV/HIP17147', rescue=False)
+    search_doppler_h5('test_out/setigen_sim/waterfall.h5')
+    search_doppler_h5('../data/BLIS692NS_EV/HIP17147', rescue=False)

@@ -9,3 +9,6 @@ pandas~=2.2.3
 astropy~=7.0.0
 scipy~=1.15.3
 torchmetrics~=1.2.1
+requests~=2.32.4
+h5py~=3.14.0
+blimpy~=2.1.4
