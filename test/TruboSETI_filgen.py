@@ -69,7 +69,8 @@ def doppler_search_fil(fil_file: str, out_dir: str = './test_out/truboseti_blis6
 
 
 if __name__ == "__main__":
-    fil_file = '../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil'
+    # fil_file = '../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil'
+    fil_file = '../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil'
     out_dir = f'./test_out/truboseti_blis692ns/{os.path.basename(fil_file).split('.', 1)[0]}'
     drift_rate = 2.0
     snr = 10
@@ -91,3 +92,4 @@ if __name__ == "__main__":
     }
 
     doppler_search_fil(fil_file, out_dir=out_dir, drift_rate=drift_rate, snr=snr, check=check, **kwargs)
+
