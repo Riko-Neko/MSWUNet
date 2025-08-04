@@ -43,8 +43,8 @@ def doppler_search_fil(fil_file: str, out_dir: str = './test_out/truboseti_blis6
         print(f"[\033[31mError\033[0m] Invalid file type: {fil_file} is not a .fil file")
         return
 
-    if out_dir is None:
-        out_dir = os.path.dirname(fil_file)
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
 
     print(f"[\033[32mInfo\033[0m] Starting Doppler search for: {fil_file}")
     print(f"[\033[32mInfo\033[0m] Output directory: {out_dir}")
