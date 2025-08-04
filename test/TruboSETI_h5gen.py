@@ -95,7 +95,7 @@ def search_doppler_h5(h5_path_or_dir, out_dir='./test_out/truboseti_blis692ns', 
 if __name__ == '__main__':
     h5_file = max(glob.glob("test_out/setigen_wf_sim/wf_sim_*.h5"), key=os.path.getctime)
     # fil_file = '../data/BLIS692NS/BLIS692NS_EV/HIP17147/spliced_blc0001020304050607_guppi_57523_69379_HIP17147_0015.gpuspec.0000.h5'
-    out_dir = f'./test_out/truboseti_blis692ns/{os.path.splitext(os.path.basename(h5_file))[0]}'
+    out_dir = f'./test_out/truboseti_blis692ns/{os.path.basename(h5_file).split('.', 1)[0]}'
     drift_rate = 2.0
     snr = 10
     check = True

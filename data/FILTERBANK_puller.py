@@ -131,6 +131,6 @@ if __name__ == '__main__':
     HIP17147 03/11/2017 07:22:49 6001.4648(1.8G)：
     python data/FILTERBANK_puller.py --targets "HIP17147" --telescope "GBT" --save-dir "./data/BLIS692NS/BLIS692NS_data" --time-start 58060.3074 --time-end 58060.3076 --freq-start 6001.4633 --freq-end 6001.4635
     HIP17147 03/11/2017 07:22:49 ALL:
-    python data/FILTERBANK_puller.py --targets "HIP17147" --telescope "GBT" --save-dir "./data/BLIS692NS_data" --time-start 58060.3074 --time-end 58060.3076
+    python data/FILTERBANK_puller.py --targets "HIP17147" --telescope "GBT" --save-dir "./data/BLIS692NS/BLIS692NS_data" --time-start 58060.3074 --time-end 58060.3076
     """
     main()
