@@ -1,4 +1,4 @@
-"""
+r"""
 This file contains the main execution code for the SETI data.
 
 Use "
@@ -366,12 +366,13 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
 
 # Main function
-def main():
+def main(cuda_id=None):
     # Set device
+    cuda_id = 0 if cuda_id is None else cuda_id
     if torch.backends.mps.is_available() and torch.backends.mps.is_built():
         device = torch.device("mps")
     elif torch.cuda.is_available():
-        device = torch.device("cuda")
+        device = torch.device(f"cuda:{cuda_id}")
     else:
         device = torch.device("cpu")
 
