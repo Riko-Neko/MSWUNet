@@ -14,7 +14,7 @@ class DynamicSpectrumDataset(Dataset):
                  drift_min=-2.0, drift_max=2.0,
                  snr_min=10.0, snr_max=30.0,
                  width_min=1.0, width_max=5.0,
-                 num_signals=(1, 1),
+                 num_signals=(0, 1),
                  noise_std_min=0.05, noise_std_max=0.2):
         """
         动态生成式数据集构造函数，参数动态适应频率和时间通道数。
@@ -55,6 +55,12 @@ class DynamicSpectrumDataset(Dataset):
         n_signals = random.randint(self.num_signals[0], self.num_signals[1])
         if np.random.random() < 0.01:
             n_signals += 1  # 1% 的概率增加一个SETI信号
+
+        # 生成判据
+        if n_signals == 0:
+            phy_prob = 0.
+        else:
+            phy_prob = 1.
 
         signals = []
         for i in range(n_signals):
@@ -155,7 +161,7 @@ class DynamicSpectrumDataset(Dataset):
         noisy_spec = noisy_spec.astype(np.float32)[np.newaxis, :, :]
         rfi_mask = rfi_mask.astype(np.float32)[np.newaxis, :, :]
 
-        return noisy_spec, clean_spec, rfi_mask
+        return noisy_spec, clean_spec, rfi_mask, phy_prob
 
 
 def plot_samples(dataset, kind='clean', num=10, out_dir=None):
@@ -188,7 +194,7 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None):
             break
 
         if isinstance(sample, (list, tuple)):
-            noisy_spec, clean_spec, rfi_mask = sample
+            noisy_spec, clean_spec, rfi_mask, _ = sample
         else:
             raise TypeError("Dataset must return a tuple (clean, noisy, mask)")
 

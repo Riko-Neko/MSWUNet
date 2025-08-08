@@ -43,18 +43,21 @@ from model.DWTNet import DWTNet
 
 
 class CombinedLoss(nn.Module):
-    def __init__(self, device, alpha=0.7, beta=0.3, adjust_threshold=20, momentum=0.9):
+    def __init__(self, device, alpha=0.7, beta=0.3, gamma=0., delta=0.1, adjust_threshold=20, momentum=0.9):
         super(CombinedLoss, self).__init__()
         self.alpha_init = alpha  # initial spectrum detection weight
         self.beta_init = beta  # initial RFI detection weight
+        self.gamma = nn.Parameter(
+            torch.tensor(gamma, device=device)) if gamma != 0. else gamma  # ssim loss weight (0 for observation)
+        self.delta = nn.Parameter(torch.tensor(delta, device=device))  # BCE loss for physical detection
         self.adjust_threshold = adjust_threshold  # window size for adjusting weights
         self.momentum = momentum
         self.jitter_period = 30  # cosine jitter period
         self.jitter_amplitude = 0.1  # jitter amplitude
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
-        self.gamma = 0.  # ssim loss weight
 
         self.mse = nn.MSELoss(reduction='none')
+        self.bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([3.0], device=device))
         self.dice = DiceLoss()
 
         # register buffers for moving average and weights
@@ -69,7 +72,7 @@ class CombinedLoss(nn.Module):
 
         self.trend_threshold = 0.001  # threshold for trend detection
 
-    def forward(self, denoised, rfi_pred, clean, mask):
+    def forward(self, denoised, rfi_pred, plogits, clean, mask, pprob):
         # mse loss for spectrum detection
         signal_weight = 10.0
         background_weight = 1.
@@ -128,8 +131,12 @@ class CombinedLoss(nn.Module):
                 self.alpha.fill_(new_alpha)
                 self.beta.fill_(1.0 - new_alpha)
 
+        # detection loss for physical detection
+        detection_loss = self.bce(pprob, plogits)
+
         # compute total loss
-        total_loss = self.alpha * spectrum_loss_scalar + self.beta * rfi_loss
+        total_loss = + (self.alpha * spectrum_loss_scalar + self.beta * rfi_loss) * (
+                1 - self.delta) + self.delta * detection_loss
 
         # update moving average
         current_mse_avg = spectrum_loss_scalar.detach()
@@ -139,7 +146,7 @@ class CombinedLoss(nn.Module):
         )
 
         self.step += 1
-        return total_loss, spectrum_loss_scalar, ssim_loss, rfi_loss, self.alpha.item(), self.beta.item()
+        return total_loss, spectrum_loss_scalar, ssim_loss, rfi_loss, detection_loss, self.alpha.item(), self.beta.item()
 
     def _compute_trend(self, history):
         n = len(history)
@@ -212,7 +219,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
     start_epoch = 0
     if resume_from and os.path.exists(resume_from):
         print(f"Resuming from checkpoint: {resume_from}")
-        checkpoint = torch.load(resume_from, map_location=device)
+        checkpoint = torch.load(resume_from, map_location=device, strict=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint['epoch'] + 1  # Start from the next epoch
@@ -235,21 +242,22 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
         for step in range(steps_per_epoch):
             try:
-                noisy, clean, mask = next(iter(train_dataloader))
+                noisy, clean, mask, pprob = next(iter(train_dataloader))
             except StopIteration:
                 train_dataloader = iter(train_dataloader)
-                noisy, clean, mask = next(train_dataloader)
+                noisy, clean, mask, pprob = next(train_dataloader)
 
             noisy = noisy.to(device)
             clean = clean.to(device)
             mask = mask.to(device)
+            pprob = pprob.to(device)
 
             # Forward pass
-            denoised, rfi_mask = model(noisy)
+            denoised, rfi_mask, plogits = model(noisy)
 
             # Calculate loss
-            total_loss, spectrum_loss, simm_loss, rfi_loss, current_alpha, current_beta = criterion(denoised, rfi_mask,
-                                                                                                    clean, mask)
+            total_loss, spectrum_loss, simm_loss, rfi_loss, detection_loss, current_alpha, current_beta = criterion(
+                denoised, rfi_mask, plogits, clean, mask, pprob)
             epoch_losses.append(total_loss.item())
 
             # Backpropagation and optimization
@@ -263,6 +271,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                 'spec': spectrum_loss.item(),
                 'ssim': simm_loss.item(),
                 'rfi': rfi_loss.item(),
+                'det': detection_loss.item(),
                 'α': current_alpha,
                 'β': current_beta
             })
@@ -272,7 +281,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             if step % log_interval == 0:
                 with open(step_log_file, 'a') as f:
                     f.write(f"{epoch},{criterion.step},{total_loss.item():.6f},"
-                            f"{spectrum_loss.item():.6f},{simm_loss.item():.6f},{rfi_loss.item():.6f},"
+                            f"{spectrum_loss.item():.6f},{simm_loss.item():.6f},{rfi_loss.item():.6f},{detection_loss.item():.6f},"
                             f"{current_alpha:.4f},{current_beta:.4f}\n")
 
         train_progress.close()
@@ -369,17 +378,17 @@ def main():
     print(f"Using device: {device}")
 
     # Create datasets
-    train_dataset = DynamicSpectrumDataset(tchans=128, fchans=1024, df=7.5, dt=10.0, fch1=None, ascending=False,
+    train_dataset = DynamicSpectrumDataset(tchans=144, fchans=1024, df=7.5, dt=1.0, fch1=None, ascending=False,
                                            drift_min=-1.0, drift_max=1.0,
                                            snr_min=10.0, snr_max=20.0,
                                            width_min=5, width_max=7.5,
-                                           num_signals=(1, 1),
+                                           num_signals=(0, 1),
                                            noise_std_min=0.05, noise_std_max=0.1)
-    valid_dataset = DynamicSpectrumDataset(tchans=128, fchans=1024, df=7.5, dt=10.0, fch1=None, ascending=False,
+    valid_dataset = DynamicSpectrumDataset(tchans=144, fchans=1024, df=7.5, dt=1.0, fch1=None, ascending=False,
                                            drift_min=-1.0, drift_max=1.0,
                                            snr_min=10.0, snr_max=20.0,
                                            width_min=5, width_max=7.5,
-                                           num_signals=(1, 1),
+                                           num_signals=(0, 1),
                                            noise_std_min=0.05, noise_std_max=0.1)
 
     # Create data loaders
@@ -399,7 +408,7 @@ def main():
     # Initialize model (assuming DWTNet outputs two tensors)
     model = DWTNet(in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4').to(device)
     # model = UNet().to(device)
-    summary(model, input_size=(1, 1, 128, 1024))
+    summary(model, input_size=(1, 1, 144, 1024))
 
     # Training configuration
     num_epochs = 1000
@@ -409,7 +418,7 @@ def main():
 
     # Loss function and optimizer
     criterion = CombinedLoss(device, alpha=0.5, beta=0.5, adjust_threshold=20, momentum=0.99)
-    optimizer = optim.Adam(model.parameters(), lr=5e-4, weight_decay=0.)
+    optimizer = optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-7)
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     #     optimizer,
     #     mode='min',

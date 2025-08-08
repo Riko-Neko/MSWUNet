@@ -34,9 +34,15 @@ def pred_model(model, dataloader, save_dir, max_steps, device, save_npy=True, pl
 
             outputs = model(inputs)
 
-            # 假设模型输出：(denoised_spectrum, predicted_rfi_mask)
-            if isinstance(outputs, (tuple, list)) and len(outputs) == 2:
-                denoised, pred_mask = outputs
+            # 假设模型输出：(denoised_spectrum, predicted_rfi_mask, detection_logits)
+            if isinstance(outputs, (tuple, list)):
+                if len(outputs) == 3:
+                    denoised, pred_mask, _ = outputs
+                elif len(outputs) == 2:
+                    denoised, _ = outputs
+                    pred_mask = None
+                else:
+                    raise ValueError(f"Unexpected outputs format. Got {outputs}")
             else:
                 denoised = outputs
                 pred_mask = None
@@ -138,9 +144,9 @@ def main():
     pred_model(dwtnet, pred_dataloader, pred_dir + "_dwtnet", pred_steps, device, save_npy=False, plot=True)
 
     # --- 2. 推理 UNet ---
-    unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
-    unet = load_model(UNet, unet_ckpt)
-    pred_model(unet, pred_dataloader, pred_dir + "_unet", pred_steps, device, save_npy=False, plot=True)
+    # unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
+    # unet = load_model(UNet, unet_ckpt)
+    # pred_model(unet, pred_dataloader, pred_dir + "_unet", pred_steps, device, save_npy=False, plot=True)
 
 
 if __name__ == "__main__":

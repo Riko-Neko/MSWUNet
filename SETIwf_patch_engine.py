@@ -1,14 +1,30 @@
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from blimpy import Waterfall
 from torch.utils.data import Dataset
 
+import platform
+
+system = platform.system()
+if system == 'Windows':
+    matplotlib.use('TkAgg')
+elif system == 'Darwin':
+    matplotlib.use('MacOSX')
+else:  # Linux
+    try:
+        matplotlib.use('TkAgg')
+    except:
+        matplotlib.use('Agg')
+
 
 class SETIDataset(Dataset):
     def __init__(self, file_path, patch_t, patch_f, overlap_pct=0.05):
-        self.obs = Waterfall(file_path, load_data=False)
-        # Assuming obs.data_shape is (tchans, n_pols, fchans)
-        self.tchans = self.obs.data_shape[0]
-        self.fchans = self.obs.data_shape[2]
+        self.obs = Waterfall(file_path, load_data=True)  # Load is a MUST
+        # obs.data_shape is (tchans, n_pols, fchans)
+        self.tchans = self.obs.selection_shape[0]
+        self.fchans = self.obs.selection_shape[2]
         self.freqs = self.obs.get_freqs()
         assert patch_t <= self.tchans, "patch_t larger than tchans"
         assert patch_f <= self.fchans, "patch_f larger than fchans"
@@ -53,13 +69,91 @@ class SETIDataset(Dataset):
             f_stop = self.freqs[start_f]
 
         # Load data
-        data, patch_freqs = self.obs.grab_data(f_start, f_stop, start_t, end_t)
-        # Assuming data is (patch_t, n_pols, patch_f)，Choose the first polarization
-        if data.shape[1] == 1:
-            data = data[:, 0, :]
-        else:
-            raise ValueError("Multiple polarizations not handled")
+        patch_freqs, data = self.obs.grab_data(f_start, f_stop, start_t, end_t)
 
         # To tensor
         patch_tensor = torch.from_numpy(data).float().unsqueeze(0)  # (1, patch_t, patch_f)
+
         return patch_tensor, (start_t, start_f)
+
+
+def plot_dataset_item(dataset, index=0, cmap='viridis', log_scale=False):
+    """
+    Visualize a single data item (patch) from SETIDataset
+
+    Args:
+        dataset: Instance of SETIDataset
+        index: Index of the data item to visualize
+        cmap: Matplotlib colormap
+        log_scale: Whether to use logarithmic color scaling
+    """
+    # Get data and position info
+    patch_tensor, (start_t, start_f) = dataset[index]
+    data = patch_tensor.squeeze(0).numpy()  # Remove channel dim -> (T, F)
+
+    # Calculate frequency range
+    freqs = dataset.freqs
+    if freqs[0] < freqs[-1]:  # Ascending order
+        f_start = freqs[start_f]
+        f_stop = freqs[start_f + dataset.patch_f - 1]
+    else:  # Descending order
+        f_start = freqs[start_f + dataset.patch_f - 1]
+        f_stop = freqs[start_f]
+
+    # Calculate time range (using indices)
+    time_indices = np.arange(start_t, start_t + dataset.patch_t)
+
+    # Create figure
+    plt.figure(figsize=(12, 8))
+
+    # Prepare plot data (transpose to make time X-axis, frequency Y-axis)
+    plot_data = data.T
+
+    # Set color normalization
+    norm = plt.Normalize()
+    if log_scale:
+        from matplotlib.colors import LogNorm
+        # Avoid zeros/negative values
+        plot_data = np.clip(plot_data, np.percentile(plot_data[plot_data > 0], 1e-10), None)
+        norm = LogNorm(vmin=plot_data.min(), vmax=plot_data.max())
+
+    # Plot time-frequency diagram
+    im = plt.imshow(plot_data, aspect='auto', origin='lower', cmap=cmap, norm=norm,
+                    extent=[time_indices.min(), time_indices.max(), min(f_start, f_stop), max(f_start, f_stop)])
+
+    # Add labels and title
+    plt.xlabel('Time Index')
+    plt.ylabel('Frequency (MHz)')
+    plt.title(
+        f'SETI Data Patch (Index: {index})\n'
+        f'Time: [{time_indices.min()}-{time_indices.max()}] | '
+        f'Freq: [{min(f_start, f_stop):.6f}-{max(f_start, f_stop):.6f}] MHz'
+    )
+
+    # Add colorbar
+    cbar = plt.colorbar(im)
+    cbar.set_label('Intensity (log)' if log_scale else 'Intensity')
+
+    plt.tight_layout()
+    plt.show()
+
+
+# Usage example
+if __name__ == "__main__":
+    # Initialize dataset
+    dataset = SETIDataset(
+        file_path="./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil",
+        # Replace with actual file path
+        patch_t=144,
+        patch_f=32768,
+        overlap_pct=0.02
+    )
+
+    # Randomly check some patch
+    for i in np.random.choice(len(dataset), 10, replace=False):
+        plot_dataset_item(dataset, i, log_scale=True)
+
+    # Check middle and edge patch
+    # plot_dataset_item(dataset, 0, log_scale=True)  # first patch
+    # plot_dataset_item(dataset, len(dataset) // 2, log_scale=True)  # middle patch
+    # plot_dataset_item(dataset, -1, log_scale=True)  # last patch

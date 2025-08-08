@@ -66,7 +66,7 @@ def create_blimpy_compatible_h5(dataset, save_path, fch1=1420e6, foff=-0.1e6, ra
         data_dset = hf.create_dataset('data', shape=data_shape, dtype=np.float32)
 
         # Generate and write data
-        noisy, _, _ = dataset[0]
+        noisy, _, _, _ = dataset[0]
         data_dset[:] = np.array(noisy).reshape(data_shape).astype(np.float32)
 
         # Set blimpy-specific attributes on the file

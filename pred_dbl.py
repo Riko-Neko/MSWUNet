@@ -34,11 +34,14 @@ def process_batch(model, batch, idx, save_dir, device, save_npy=True, plot=False
         outputs = model(inputs)
 
         # Handle model outputs (denoised spectrum, predicted RFI mask)
-        if isinstance(outputs, (tuple, list)) and len(outputs) == 2:
-            denoised, pred_mask = outputs
-        else:
-            denoised = outputs
-            pred_mask = None
+        if isinstance(outputs, (tuple, list)):
+            if len(outputs) == 3:
+                denoised, pred_mask, _ = outputs
+            elif len(outputs) == 2:
+                denoised, _ = outputs
+                pred_mask = None
+            else:
+                raise ValueError(f"Unexpected outputs format. Got {outputs}")
 
         # Save outputs as numpy files
         if save_npy:
