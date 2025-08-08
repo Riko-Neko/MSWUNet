@@ -243,7 +243,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
         # Training phase
         model.train()
-        train_progress = tqdm(total=steps_per_epoch, desc=f"Training Epoch {epoch + 1}")
+        train_progress = tqdm(total=steps_per_epoch, desc=f"Training Epoch {epoch + 1}", colour='green')
 
         for step in range(steps_per_epoch):
             try:
@@ -299,7 +299,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
         if valid_dataloader and (epoch + 1) % valid_interval == 0:
             model.eval()
             valid_losses = []
-            valid_progress = tqdm(total=valid_steps, desc=f"Validation Epoch {epoch + 1}")
+            valid_progress = tqdm(total=valid_steps, desc=f"Validation Epoch {epoch + 1}", colour='yellow')
 
             for i in range(valid_steps):
                 try:
