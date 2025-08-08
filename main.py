@@ -315,7 +315,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
                 with torch.no_grad():
                     denoised, rfi_mask, plogits = model(noisy)
-                    total_loss, _, _, _, _, _, _, _ = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
+                    total_loss, _, _, _, _, _, _, _, _ = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
                     valid_losses.append(total_loss.item())
 
                 valid_progress.set_postfix({'loss': total_loss.item()})
