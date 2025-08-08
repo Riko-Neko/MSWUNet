@@ -44,7 +44,7 @@ from model.DWTNet import DWTNet
 
 
 class CombinedLoss(nn.Module):
-    def __init__(self, device, alpha=0.7, beta=0.3, gamma=0., delta=0.1, adjust_threshold=20, momentum=0.9):
+    def __init__(self, device, alpha=0.7, beta=0.3, gamma=0., delta=0.1, adjust_threshold=20, momentum=0.99):
         super(CombinedLoss, self).__init__()
         self.alpha_init = alpha  # initial spectrum detection weight
         self.beta_init = beta  # initial RFI detection weight
@@ -147,7 +147,7 @@ class CombinedLoss(nn.Module):
         )
 
         self.step += 1
-        return total_loss, spectrum_loss_scalar, ssim_loss, rfi_loss, detection_loss, self.alpha.item(), self.beta.item()
+        return total_loss, spectrum_loss_scalar, ssim_loss, rfi_loss, detection_loss, self.alpha.item(), self.beta.item(), self.gamma.item(), self.delta.item()
 
     def _compute_trend(self, history):
         n = len(history)
@@ -261,7 +261,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             denoised, rfi_mask, plogits = model(noisy)
 
             # Calculate loss
-            total_loss, spectrum_loss, simm_loss, rfi_loss, detection_loss, current_alpha, current_beta = criterion(
+            total_loss, spectrum_loss, simm_loss, rfi_loss, detection_loss, current_alpha, current_beta, current_gamma, current_delta = criterion(
                 denoised, rfi_mask, plogits, clean, mask, pprob)
             epoch_losses.append(total_loss.item())
 
@@ -278,7 +278,9 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                 'rfi': rfi_loss.item(),
                 'det': detection_loss.item(),
                 'α': current_alpha,
-                'β': current_beta
+                'β': current_beta,
+                'γ': current_gamma,
+                'δ': current_delta
             })
             train_progress.update(1)
 
@@ -287,7 +289,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                 with open(step_log_file, 'a') as f:
                     f.write(f"{epoch},{criterion.step},{total_loss.item():.6f},"
                             f"{spectrum_loss.item():.6f},{simm_loss.item():.6f},{rfi_loss.item():.6f},{detection_loss.item():.6f},"
-                            f"{current_alpha:.4f},{current_beta:.4f}\n")
+                            f"{current_alpha:.4f},{current_beta:.4f},{current_gamma:.4f},{current_delta:.4f}\n")
 
         train_progress.close()
         avg_train_loss = np.mean(epoch_losses)
@@ -313,7 +315,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
                 with torch.no_grad():
                     denoised, rfi_mask, plogits = model(noisy)
-                    total_loss, _, _, _, _, _ = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
+                    total_loss, _, _, _, _, _, _, _ = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
                     valid_losses.append(total_loss.item())
 
                 valid_progress.set_postfix({'loss': total_loss.item()})
@@ -429,7 +431,7 @@ def main():
     valid_steps = 30
 
     # Loss function and optimizer
-    criterion = CombinedLoss(device, alpha=0.5, beta=0.5, adjust_threshold=20, momentum=0.99)
+    criterion = CombinedLoss(device, alpha=0.5, beta=0.5, gamma=0.1, momentum=0.99)
     optimizer = optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-7)
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     #     optimizer,
