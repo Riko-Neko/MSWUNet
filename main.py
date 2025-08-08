@@ -48,8 +48,8 @@ class CombinedLoss(nn.Module):
         super(CombinedLoss, self).__init__()
         self.alpha_init = alpha  # initial spectrum detection weight
         self.beta_init = beta  # initial RFI detection weight
-        self.gamma = nn.Parameter(
-            torch.tensor(gamma, device=device)) if gamma != 0. else gamma  # ssim loss weight (0 for observation)
+        self.gamma = nn.Parameter(torch.tensor(gamma, device=device)) if gamma != 0. else torch.tensor(0.,
+                                                                                                       device=device)  # ssim loss weight (0 for observation)
         self.delta = nn.Parameter(torch.tensor(delta, device=device))  # BCE loss for physical detection
         self.adjust_threshold = adjust_threshold  # window size for adjusting weights
         self.momentum = momentum
@@ -432,7 +432,7 @@ def main():
     valid_steps = 30
 
     # Loss function and optimizer
-    criterion = CombinedLoss(device, alpha=0.5, beta=0.5, gamma=0.1, momentum=0.99)
+    criterion = CombinedLoss(device, alpha=0.5, beta=0.5, delta=0.2, momentum=0.99)
     optimizer = optim.Adam(list(model.parameters()) + list(criterion.parameters()), lr=5e-4, weight_decay=1e-7)
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     #     optimizer,
