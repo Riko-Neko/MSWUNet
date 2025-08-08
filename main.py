@@ -89,7 +89,8 @@ class CombinedLoss(nn.Module):
 
         # apply moving average normalization to spectrum loss
         normalized_spectrum_loss = spectrum_loss / torch.clamp(self.mse_moving_avg, min=1e-6)
-        spectrum_loss_scalar = normalized_spectrum_loss.mean() * (1 - self.gamma) + ssim_loss * self.gamma
+        gamma = torch.relu(self.gamma)
+        spectrum_loss_scalar = normalized_spectrum_loss.mean() * (1 - gamma) + ssim_loss * gamma
 
         # dice loss for RFI detection
         rfi_loss = self.dice(rfi_pred, mask)
@@ -134,10 +135,10 @@ class CombinedLoss(nn.Module):
 
         # detection loss for physical detection
         detection_loss = self.bce(plogits, pprob)
+        delta = torch.relu(self.delta)
 
         # compute total loss
-        total_loss = + (self.alpha * spectrum_loss_scalar + self.beta * rfi_loss) * (
-                1 - self.delta) + self.delta * detection_loss
+        total_loss = + (self.alpha * spectrum_loss_scalar + self.beta * rfi_loss) * (1 - delta) + delta * detection_loss
 
         # update moving average
         current_mse_avg = spectrum_loss_scalar.detach()
