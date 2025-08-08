@@ -24,6 +24,7 @@ git diff --cached --name-only | grep '\.png$' | xargs git restore --staged
 Make sure you do this before committing.
 
 """
+import argparse
 import os
 import time
 from pathlib import Path
@@ -219,8 +220,8 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
     start_epoch = 0
     if resume_from and os.path.exists(resume_from):
         print(f"Resuming from checkpoint: {resume_from}")
-        checkpoint = torch.load(resume_from, map_location=device, strict=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        checkpoint = torch.load(resume_from, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint['epoch'] + 1  # Start from the next epoch
         criterion.step = checkpoint['criterion_step']
@@ -366,9 +367,14 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
 
 # Main function
-def main(cuda_id=None):
+def main():
+    parser = argparse.ArgumentParser(description="Select CUDA device")
+    parser.add_argument('-d', '--device', type=int, default=0,
+                        help='CUDA device ID, default is 0')
+    args = parser.parse_args()
+    cuda_id = args.device
+
     # Set device
-    cuda_id = 0 if cuda_id is None else cuda_id
     if torch.backends.mps.is_available() and torch.backends.mps.is_built():
         device = torch.device("mps")
     elif torch.cuda.is_available():
