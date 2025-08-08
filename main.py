@@ -301,7 +301,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
             for i in range(valid_steps):
                 try:
-                    noisy, clean, mask = next(iter(valid_dataloader))
+                    noisy, clean, mask, pprob = next(iter(valid_dataloader))
                 except StopIteration:
                     valid_dataloader = iter(valid_dataloader)
                     noisy, clean, mask, pprob = next(valid_dataloader)
