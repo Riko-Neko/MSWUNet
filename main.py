@@ -432,7 +432,7 @@ def main():
 
     # Loss function and optimizer
     criterion = CombinedLoss(device, alpha=0.5, beta=0.5, gamma=0.1, momentum=0.99)
-    optimizer = optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-7)
+    optimizer = optim.Adam(list(model.parameters()) + list(criterion.parameters()), lr=5e-4, weight_decay=1e-7)
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     #     optimizer,
     #     mode='min',
