@@ -133,7 +133,7 @@ class CombinedLoss(nn.Module):
                 self.beta.fill_(1.0 - new_alpha)
 
         # detection loss for physical detection
-        detection_loss = self.bce(pprob, plogits)
+        detection_loss = self.bce(plogits, pprob)
 
         # compute total loss
         total_loss = + (self.alpha * spectrum_loss_scalar + self.beta * rfi_loss) * (
@@ -219,20 +219,20 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
     # Load checkpoint if resuming
     start_epoch = 0
     if resume_from and os.path.exists(resume_from):
-        print(f"Resuming from checkpoint: {resume_from}")
+        print(f"[\033[32mInfo\033[0m] Resuming from checkpoint: {resume_from}")
         checkpoint = torch.load(resume_from, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'], strict=False)
         start_epoch = checkpoint['epoch'] + 1  # Start from the next epoch
         criterion.step = checkpoint['criterion_step']
         criterion.mse_moving_avg = checkpoint['mse_moving_avg']
-        print(f"Resumed at epoch {start_epoch}")
+        print(f"[\033[32mInfo\033[0m] Resumed at epoch {start_epoch}")
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            print("Optimizer state loaded.")
+            print("[\033[32mInfo\033[0m] Optimizer state loaded.")
         except Exception as e:
             print(f"[\033[33mWarning\033[0m]: failed to load optimizer state: {e}")
     else:
-        print("Starting training from scratch.")
+        print("[\033[32mInfo\033[0m] Starting training from scratch.")
 
     # Training loop
     for epoch in range(start_epoch, num_epochs):
