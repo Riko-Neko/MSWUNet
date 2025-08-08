@@ -230,7 +230,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             print("Optimizer state loaded.")
         except Exception as e:
-            print(f"[\033[31mWarning\033[0m]: failed to load optimizer state: {e}")
+            print(f"[\033[33mWarning\033[0m]: failed to load optimizer state: {e}")
     else:
         print("Starting training from scratch.")
 
@@ -304,15 +304,16 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                     noisy, clean, mask = next(iter(valid_dataloader))
                 except StopIteration:
                     valid_dataloader = iter(valid_dataloader)
-                    noisy, clean, mask = next(valid_dataloader)
+                    noisy, clean, mask, pprob = next(valid_dataloader)
 
                 noisy = noisy.to(device)
                 clean = clean.to(device)
                 mask = mask.to(device)
+                pprob = pprob.to(device)
 
                 with torch.no_grad():
-                    denoised, rfi_mask = model(noisy)
-                    total_loss, _, _, _, _, _ = criterion(denoised, rfi_mask, clean, mask)
+                    denoised, rfi_mask, plogits = model(noisy)
+                    total_loss, _, _, _, _, _ = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
                     valid_losses.append(total_loss.item())
 
                 valid_progress.set_postfix({'loss': total_loss.item()})
