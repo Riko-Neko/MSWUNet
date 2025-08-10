@@ -5,7 +5,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 
-from SETIgen import sim_dynamic_spec_seti
+from gen.SETIgen import sim_dynamic_spec_seti
 
 
 class DynamicSpectrumDataset(Dataset):
@@ -178,9 +178,9 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None):
 
     if out_dir is None:
         out_dir = {
-            'clean': './plot/sim',
-            'noisy': './plot/no',
-            'mask': './plot/rfi'
+            'clean': '../plot/sim',
+            'noisy': '../plot/no',
+            'mask': '../plot/rfi'
         }[kind]
     os.makedirs(out_dir, exist_ok=True)
 

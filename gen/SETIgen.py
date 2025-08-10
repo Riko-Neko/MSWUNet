@@ -6,9 +6,12 @@ import numpy as np
 import setigen as stg
 from astropy import units as u
 
-matplotlib.use('MacOSX')
+try:
+    matplotlib.use('MacOSX')
+except:
+    pass
 import matplotlib.pyplot as plt
-from FRIgen import add_rfi
+from gen.FRIgen import add_rfi
 
 
 def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
@@ -258,7 +261,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
 if __name__ == "__main__":
     import os
 
-    out_dir = "./plot/sim_raw/"
+    out_dir = "../plot/sim_raw/"
     os.makedirs(out_dir, exist_ok=True)
 
     signals = [{

@@ -1,5 +1,5 @@
 """
-This is a test script for the turbo_seti package. It searches for Doppler shifts in BLIS692NS_EV data.
+This is a data_process script for the turbo_seti package. It searches for Doppler shifts in BLIS692NS_EV data.
 
 OPPS! This script may be outdated and needs to be updated to work with the latest turbo_seti version.
 

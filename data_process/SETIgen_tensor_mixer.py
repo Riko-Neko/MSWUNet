@@ -4,7 +4,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from SETIdataset import DynamicSpectrumDataset
+from gen.SETIdataset import DynamicSpectrumDataset
 
 
 def ra_deg_to_hhmmss(ra_deg):
