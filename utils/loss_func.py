@@ -5,13 +5,17 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 
 class CombinedLoss(nn.Module):
-    def __init__(self, device, alpha=0.7, beta=0.3, gamma=0., delta=0.1, adjust_threshold=20, momentum=0.99):
+    def __init__(self, device, alpha=0.7, beta=0.3, gamma=0., delta=0.1, adjust_threshold=20, momentum=0.99,
+                 fixed_g_d=False):
         super(CombinedLoss, self).__init__()
         self.alpha_init = alpha  # initial spectrum detection weight
         self.beta_init = beta  # initial RFI detection weight
-        self.gamma = nn.Parameter(torch.tensor(gamma, device=device)) if gamma != 0. else torch.tensor(0.,
-                                                                                                       device=device)  # ssim loss weight (0 for observation)
-        self.delta = nn.Parameter(torch.tensor(delta, device=device))  # BCE loss for physical detection
+        fixed_gamma = fixed_delta = bool(fixed_g_d)
+        if isinstance(fixed_g_d, (list, tuple)) and len(fixed_g_d) == 2:
+            fixed_gamma, fixed_delta = map(bool, fixed_g_d)
+        self.gamma = gamma if fixed_gamma else nn.Parameter(torch.tensor(gamma, device=device))
+        self.delta = delta if fixed_delta else nn.Parameter(torch.tensor(delta, device=device))
+
         self.adjust_threshold = adjust_threshold  # window size for adjusting weights
         self.momentum = momentum
         self.jitter_period = 30  # cosine jitter period
