@@ -10,11 +10,12 @@ class CombinedLoss(nn.Module):
         super(CombinedLoss, self).__init__()
         self.alpha_init = alpha  # initial spectrum detection weight
         self.beta_init = beta  # initial RFI detection weight
+        gamma, delta = torch.tensor(gamma, device=device), torch.tensor(delta, device=device)
         fixed_gamma = fixed_delta = bool(fixed_g_d)
         if isinstance(fixed_g_d, (list, tuple)) and len(fixed_g_d) == 2:
             fixed_gamma, fixed_delta = map(bool, fixed_g_d)
-        self.gamma = gamma if fixed_gamma else nn.Parameter(torch.tensor(gamma, device=device))
-        self.delta = delta if fixed_delta else nn.Parameter(torch.tensor(delta, device=device))
+        self.gamma = gamma if fixed_gamma else nn.Parameter(gamma)
+        self.delta = delta if fixed_delta else nn.Parameter(delta)
 
         self.adjust_threshold = adjust_threshold  # window size for adjusting weights
         self.momentum = momentum
