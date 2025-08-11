@@ -46,9 +46,9 @@ MultiDWTNet is a deep-learning project that implements **DWTNet**, a hybrid mode
 - **Example working effect**
 
 <p align="center">
-  <img src="pred_results/SETI/DWTNet/db4-v2/pred_0000.png" width="30%" />
-  <img src="pred_results/SETI/DWTNet/db4-v2/pred_0001.png" width="30%" />
-  <img src="pred_results/SETI/DWTNet/db4-v2/pred_0002.png" width="30%" />
+  <img src="pred_results/plots/DWTNet/pred_0000.png" width="30%" />
+  <img src="pred_results/plots/DWTNet/pred_0001.png" width="30%" />
+  <img src="pred_results/plots/DWTNet/pred_0002.png" width="30%" />
 </p>
 
 *The five-layer visualization includes (from top to bottom): clean simulation, noisy input, interference mask, denoised output, and the final generated map.*
