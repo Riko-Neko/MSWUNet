@@ -1,170 +1,210 @@
 import os
 from pathlib import Path
+from typing import Optional, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
 
-def pred_model(model, dataloader, save_dir, max_steps, device, save_npy=True, plot=False):
-    model.eval()
-    os.makedirs(save_dir, exist_ok=True)
-    plot_dir = Path(save_dir) / "plots" / f"{model.__class__.__name__}"
-    if plot:
-        plot_dir.mkdir(parents=True, exist_ok=True)
+def _process_batch_core(model, batch, device):
+    """
+    Core processing function: Handles input batch and returns model outputs
 
-    with torch.no_grad():
-        for idx, batch in enumerate(dataloader):
-            if idx >= max_steps:
-                break
+    Args:
+        model: The neural network model to use for prediction
+        batch: Input data batch (can be tuple/list or single tensor)
+        device: Device to run computation on (e.g., 'cuda' or 'cpu')
 
-            if isinstance(batch, (list, tuple)):
-                inputs = batch[0].to(device)  # Noisy input
-                clean = batch[1].to(device) if len(batch) > 1 else None
-                rfi_mask = batch[2].to(device) if len(batch) > 2 else None
-            else:
-                inputs = batch.to(device)
-                clean = None
-                rfi_mask = None
+    Returns:
+        Dictionary containing:
+        - inputs: Original noisy input
+        - denoised: Model's denoised output
+        - pred_mask: Predicted RFI mask (if available)
+        - clean: Ground truth clean spectrum (if available)
+        - rfi_mask: Ground truth RFI mask (if available)
+    """
+    # Handle different input formats (single tensor or tuple/list)
+    if isinstance(batch, (list, tuple)):
+        inputs = batch[0].to(device)  # Noisy input
+        clean = batch[1].to(device) if len(batch) > 1 else None
+        rfi_mask = batch[2].to(device) if len(batch) > 2 else None
+    else:
+        inputs = batch.to(device)
+        clean = None
+        rfi_mask = None
 
-            outputs = model(inputs)
+    # Get model predictions
+    outputs = model(inputs)
 
-            # 假设模型输出：(denoised_spectrum, predicted_rfi_mask, detection_logits)
-            if isinstance(outputs, (tuple, list)):
-                if len(outputs) == 3:
-                    denoised, pred_mask, _ = outputs
-                elif len(outputs) == 2:
-                    denoised, _ = outputs
-                    pred_mask = None
-                else:
-                    raise ValueError(f"Unexpected outputs format. Got {outputs}")
-            else:
-                denoised = outputs
-                pred_mask = None
-
-            # 保存输出
-            if save_npy:
-                np.save(os.path.join(save_dir, f"pred_denoised_{idx:04d}.npy"), denoised.cpu().numpy())
-                if pred_mask is not None:
-                    np.save(os.path.join(save_dir, f"pred_mask_{idx:04d}.npy"), pred_mask.cpu().numpy())
-                print(f"Saved denoised spectrum: {os.path.join(save_dir, f'pred_denoised_{idx:04d}.npy')}")
-
-            # 绘图
-            if plot:
-                # 转 CPU numpy
-                noisy_spec = inputs[0].cpu().squeeze().numpy()
-                denoised_spec = denoised[0].cpu().squeeze().numpy()
-                pred_mask_np = pred_mask[0].cpu().squeeze().numpy() if pred_mask is not None else None
-                clean_spec = clean[0].cpu().squeeze().numpy() if clean is not None else None
-                rfi_mask_np = rfi_mask[0].cpu().squeeze().numpy() if rfi_mask is not None else None
-
-                # 假设 freq 为横轴
-                freq_axis = np.arange(noisy_spec.shape[1])
-                time_frames = noisy_spec.shape[0]
-
-                fig, axs = plt.subplots(5, 1, figsize=(14, 35))
-
-                def plot_spec(ax, data, title, cmap='viridis'):
-                    im = ax.imshow(data, aspect='auto', origin='lower',
-                                   extent=[freq_axis[0], freq_axis[-1], 0, time_frames],
-                                   cmap=cmap)
-                    ax.set_title(title)
-                    ax.set_ylabel("Time Frame")
-                    fig.colorbar(im, ax=ax, label="Intensity")
-
-                plot_spec(axs[0], clean_spec if clean_spec is not None else np.zeros_like(noisy_spec), "Clean Spectrum")
-                plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis')
-                plot_spec(axs[2], rfi_mask_np if rfi_mask_np is not None else np.zeros_like(noisy_spec),
-                          "Ground Truth RFI Mask", cmap='Reds')
-                plot_spec(axs[3], denoised_spec, "Denoised Spectrum", cmap='viridis')
-                plot_spec(axs[4], pred_mask_np if pred_mask_np is not None else np.zeros_like(noisy_spec),
-                          "Predicted RFI Mask", cmap='Reds')
-
-                axs[-1].set_xlabel("Frequency Channel")
-
-                plt.tight_layout()
-                plot_path = plot_dir / f"pred_{idx:04d}.png"
-                # plot_path = plot_dir / f"pred_{model.__class__.__name__}_{idx:04d}.png"
-                plt.savefig(plot_path, dpi=480, bbox_inches='tight')
-                plt.close()
-                print(f"Saved plot: {plot_path}")
-
-
-def process_batch(model, batch, idx, save_dir, device, save_npy=True, plot=False):
-    """Process a single batch with the given model and save results"""
-    model.eval()
-    os.makedirs(save_dir, exist_ok=True)
-
-    # Prepare plot directory if needed
-    plot_dir = Path(save_dir) / "plots" / f"{model.__class__.__name__}"
-    if plot:
-        plot_dir.mkdir(parents=True, exist_ok=True)
-
-    with torch.no_grad():
-        if isinstance(batch, (list, tuple)):
-            inputs = batch[0].to(device)  # Noisy input
-            clean = batch[1].to(device) if len(batch) > 1 else None
-            rfi_mask = batch[2].to(device) if len(batch) > 2 else None
+    # Parse different output formats from model
+    logits = None
+    if isinstance(outputs, (tuple, list)):
+        if len(outputs) == 3:
+            denoised, pred_mask, logits = outputs  # (denoised, mask, logits)
+        elif len(outputs) == 2:
+            denoised, pred_mask = outputs  # (denoised, mask)
         else:
-            inputs = batch.to(device)
-            clean = None
-            rfi_mask = None
+            denoised = outputs[0]  # Assume first is denoised
+            pred_mask = None
+    else:
+        denoised = outputs  # Single output
+        pred_mask = None
 
-        outputs = model(inputs)
+    return {
+        "inputs": inputs,
+        "clean": clean,
+        "denoised": denoised,
+        "rfi_mask": rfi_mask,
+        "pred_mask": pred_mask,
+        "logits": logits
+    }
 
-        # Handle model outputs (denoised spectrum, predicted RFI mask)
-        if isinstance(outputs, (tuple, list)):
-            if len(outputs) == 3:
-                denoised, pred_mask, _ = outputs
-            elif len(outputs) == 2:
-                denoised, _ = outputs
-                pred_mask = None
-            else:
-                raise ValueError(f"Unexpected outputs format. Got {outputs}")
 
-        # Save outputs as numpy files
-        if save_npy:
-            np.save(os.path.join(save_dir, f"pred_denoised_{idx:04d}.npy"), denoised.cpu().numpy())
-            if pred_mask is not None:
-                np.save(os.path.join(save_dir, f"pred_mask_{idx:04d}.npy"), pred_mask.cpu().numpy())
-            print(f"Saved denoised spectrum: {os.path.join(save_dir, f'pred_denoised_{idx:04d}.npy')}")
+def _save_batch_results(results, idx, save_dir, model_class_name, save_npy=True, plot=False):
+    """
+    Save and visualize results for a single batch
 
-        # Generate plots if requested
-        if plot:
-            # Convert tensors to numpy arrays
-            noisy_spec = inputs[0].cpu().squeeze().numpy()
-            denoised_spec = denoised[0].cpu().squeeze().numpy()
-            pred_mask_np = pred_mask[0].cpu().squeeze().numpy() if pred_mask is not None else None
-            clean_spec = clean[0].cpu().squeeze().numpy() if clean is not None else None
-            rfi_mask_np = rfi_mask[0].cpu().squeeze().numpy() if rfi_mask is not None else None
+    Args:
+        results: Dictionary from _process_batch_core
+        idx: Batch index (used for filenames)
+        save_dir: Directory to save outputs
+        model_class_name: Name of model class (for plot subfolder)
+        save_npy: Whether to save numpy arrays
+        plot: Whether to generate visualization plots
+    """
+    # Create plot directory if needed
+    plot_dir = Path(save_dir) / "plots" / model_class_name
+    if plot:
+        plot_dir.mkdir(parents=True, exist_ok=True)
 
-            # Create frequency axis for plotting
-            freq_axis = np.arange(noisy_spec.shape[1])
-            time_frames = noisy_spec.shape[0]
+    # Save numpy arrays
+    if save_npy:
+        np.save(os.path.join(save_dir, "npy", f"pred_denoised_{idx:04d}.npy"),
+                results["denoised"].cpu().numpy())
+        if results["pred_mask"] is not None:
+            np.save(os.path.join(save_dir, "npy", f"pred_mask_{idx:04d}.npy"),
+                    results["pred_mask"].cpu().numpy())
+        print(f"Saved denoised spectrum: {os.path.join(save_dir, "npy", f'pred_denoised_{idx:04d}.npy')}")
 
-            # Create figure with subplots
-            fig, axs = plt.subplots(5, 1, figsize=(14, 35))
+    # Generate visualization plots
+    if plot:
+        # Extract first sample from batch
+        noisy_spec = results["inputs"][0].cpu().squeeze().numpy()
+        denoised_spec = results["denoised"][0].cpu().squeeze().numpy()
+        pred_mask_np = (results["pred_mask"][0].cpu().squeeze().numpy()
+                        if results["pred_mask"] is not None else None)
+        clean_spec = (results["clean"][0].cpu().squeeze().numpy()
+                      if results["clean"] is not None else None)
+        rfi_mask_np = (results["rfi_mask"][0].cpu().squeeze().numpy()
+                       if results["rfi_mask"] is not None else None)
+        logits_value = None
+        if results["logits"] is not None:
+            logits_tensor = results["logits"][0].cpu()
+            probability = torch.sigmoid(logits_tensor).item()
+            logits_value = probability > 0.5
 
-            def plot_spec(ax, data, title, cmap='viridis'):
-                im = ax.imshow(data, aspect='auto', origin='lower',
-                               extent=[freq_axis[0], freq_axis[-1], 0, time_frames],
-                               cmap=cmap)
-                ax.set_title(title)
-                ax.set_ylabel("Time Frame")
-                fig.colorbar(im, ax=ax, label="Intensity")
+        # Create frequency axis
+        freq_axis = np.arange(noisy_spec.shape[1])
+        time_frames = noisy_spec.shape[0]
 
-            plot_spec(axs[0], clean_spec if clean_spec is not None else np.zeros_like(noisy_spec), "Clean Spectrum")
-            plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis')
-            plot_spec(axs[2], rfi_mask_np if rfi_mask_np is not None else np.zeros_like(noisy_spec),
-                      "Ground Truth RFI Mask", cmap='Reds')
-            plot_spec(axs[3], denoised_spec, "Denoised Spectrum", cmap='viridis')
-            plot_spec(axs[4], pred_mask_np if pred_mask_np is not None else np.zeros_like(noisy_spec),
-                      "Predicted RFI Mask", cmap='Reds')
+        # Create figure with subplots
+        fig, axs = plt.subplots(5, 1, figsize=(14, 35))
 
-            axs[-1].set_xlabel("Frequency Channel")
+        def plot_spec(ax, data, title, cmap='viridis'):
+            """Helper function to plot spectrum data"""
+            im = ax.imshow(data, aspect='auto', origin='lower',
+                           extent=[freq_axis[0], freq_axis[-1], 0, time_frames],
+                           cmap=cmap)
+            ax.set_title(title)
+            ax.set_ylabel("Time Frame")
+            fig.colorbar(im, ax=ax, label="Intensity")
 
-            plt.tight_layout()
-            plot_path = plot_dir / f"pred_{idx:04d}.png"
-            plt.savefig(plot_path, dpi=480, bbox_inches='tight')
-            plt.close()
-            print(f"Saved plot: {plot_path}")
+        # Plot all components
+        plot_spec(axs[0], clean_spec if clean_spec is not None else np.zeros_like(noisy_spec),
+                  "Clean Spectrum")
+        if logits_value is not None:
+            axs[0].text(0.95, 0.05, f"Flag: {logits_value}", transform=axs[0].transAxes, fontsize=12,
+                        horizontalalignment='right', verticalalignment='bottom',
+                        bbox=dict(facecolor='white', alpha=0.8))
+        plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis')
+        plot_spec(axs[2], rfi_mask_np if rfi_mask_np is not None else np.zeros_like(noisy_spec),
+                  "Ground Truth RFI Mask", cmap='Reds')
+        plot_spec(axs[3], denoised_spec, "Denoised Spectrum", cmap='viridis')
+        plot_spec(axs[4], pred_mask_np if pred_mask_np is not None else np.zeros_like(noisy_spec),
+                  "Predicted RFI Mask", cmap='Reds')
+
+        axs[-1].set_xlabel("Frequency Channel")
+        plt.tight_layout()
+
+        # Save figure
+        plot_path = plot_dir / f"pred_{idx:04d}.png"
+        plt.savefig(plot_path, dpi=480, bbox_inches='tight')
+        plt.close()
+        print(f"Saved plot: {plot_path}")
+
+
+def pred(
+        model: torch.nn.Module,
+        data: Union[DataLoader, torch.Tensor],
+        save_dir: Union[str, Path],
+        device: torch.device,
+        mode: str = "dataloader",
+        max_steps: Optional[int] = None,
+        idx: Optional[int] = None,
+        save_npy: bool = True,
+        plot: bool = False,
+        file_path: Optional[str] = None,
+        model_checkpoint: Optional[str] = None
+):
+    """
+    Unified prediction function that handles both batch and dataloader processing, and pipeline mode
+
+    Args:
+        model: Model to use for prediction
+        data: Either a DataLoader (for dataloader mode) or a batch tensor (for batch mode)
+        save_dir: Directory to save outputs
+        device: Computation device
+        mode: Processing mode:
+              "dbl" for batch mode (process single batch),
+              "pipeline" for interactive renderer mode,
+              otherwise dataloader mode (process entire dataloader)
+        max_steps: For dataloader mode, maximum number of batches to process
+        idx: For batch mode, batch index (for filenames)
+        save_npy: Whether to save numpy outputs
+        plot: Whether to generate plots
+        file_path: For pipeline mode, path to the data file
+        model_checkpoint: For pipeline mode, path to model checkpoint
+    """
+    model.eval()
+    os.makedirs(save_dir, exist_ok=True)
+
+    with torch.no_grad():
+        if mode == "dbl":  # Batch processing mode
+            if idx is None:
+                raise ValueError("In batch mode, 'idx' must be provided")
+
+            # Process single batch
+            results = _process_batch_core(model, data, device)
+            _save_batch_results(
+                results, idx, save_dir,
+                model.__class__.__name__,
+                save_npy, plot
+            )
+
+        else:  # Dataloader processing mode
+            if max_steps is None:
+                raise ValueError("In dataloader mode, 'max_steps' must be provided")
+
+            # Process entire dataloader
+            for batch_idx, batch in enumerate(data):
+                if batch_idx >= max_steps:
+                    break
+
+                results = _process_batch_core(model, batch, device)
+                _save_batch_results(
+                    results, batch_idx, save_dir,
+                    model.__class__.__name__,
+                    save_npy, plot
+                )

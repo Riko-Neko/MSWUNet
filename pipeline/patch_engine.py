@@ -1,11 +1,11 @@
+import platform
+
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from blimpy import Waterfall
 from torch.utils.data import Dataset
-
-import platform
 
 system = platform.system()
 if system == 'Windows':
@@ -19,7 +19,7 @@ else:  # Linux
         matplotlib.use('Agg')
 
 
-class SETIDataset(Dataset):
+class SETIWaterFullDataset(Dataset):
     def __init__(self, file_path, patch_t, patch_f, overlap_pct=0.05):
         self.obs = Waterfall(file_path, load_data=True)  # Load is a MUST
         # obs.data_shape is (tchans, n_pols, fchans)
@@ -75,6 +75,24 @@ class SETIDataset(Dataset):
         patch_tensor = torch.from_numpy(data).float().unsqueeze(0)  # (1, patch_t, patch_f)
 
         return patch_tensor, (start_t, start_f)
+
+    def get_patch(self, row, col):
+        index = row * len(self.start_f_list) + col
+        patch_tensor, (start_t, start_f) = self.__getitem__(index)
+        end_t = start_t + self.patch_t
+        end_f = start_f + self.patch_f
+
+        if self.freqs[0] < self.freqs[-1]:  # Ascending
+            f_min = self.freqs[start_f]
+            f_max = self.freqs[end_f - 1]
+        else:  # Descending
+            f_min = self.freqs[end_f - 1]
+            f_max = self.freqs[start_f]
+
+        freq_range = (f_min, f_max)
+        time_range = (start_t, end_t)
+
+        return patch_tensor, freq_range, time_range
 
 
 def plot_dataset_item(dataset, index=0, cmap='viridis', log_scale=False):
@@ -141,7 +159,7 @@ def plot_dataset_item(dataset, index=0, cmap='viridis', log_scale=False):
 # Usage example
 if __name__ == "__main__":
     # Initialize dataset
-    dataset = SETIDataset(
+    dataset = SETIWaterFullDataset(
         file_path="../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil",
         # Replace with actual file path
         patch_t=144,
