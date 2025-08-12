@@ -99,19 +99,18 @@ def create_blimpy_compatible_h5(dataset, save_path, fch1=1420e6, foff=-0.1e6, ra
 
 
 if __name__ == "__main__":
+    tchans = 144
     fchans = 1024
-    tchans = 128
     df = 7.5
     dt = 1.0
+    drift_min = -4.0
+    drift_max = 4.0
+    drift_min_abs = df // (tchans * dt)
     bandwidth = df * fchans / 1e6  # MHz
-    test_dataset = DynamicSpectrumDataset(
-        tchans=tchans, fchans=fchans, df=df, dt=dt,
-        drift_min=-1.0, drift_max=1.0,
-        snr_min=10.0, snr_max=20.0,
-        width_min=5, width_max=7.5,
-        num_signals=(1, 1),
-        noise_std_min=0.05, noise_std_max=0.1
-    )
+    test_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
+                                          drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.2,
+                                          snr_min=10.0, snr_max=20.0, width_min=10, width_max=15, num_signals=(1, 1),
+                                          noise_std_min=0.025, noise_std_max=0.05)
 
     create_blimpy_compatible_h5(
         dataset=test_dataset,
