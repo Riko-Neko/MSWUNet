@@ -8,10 +8,10 @@ import torch
 from tqdm import tqdm
 
 
-# Training function with validation, best model saving, and checkpoint loading
+# Training function with validation, best model saving, checkpoint loading, and force_save_best switch
 def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer, scheduler, device,
                 num_epochs=100, steps_per_epoch=1000, valid_interval=1, valid_steps=50,
-                checkpoint_dir='./checkpoints', log_interval=50, resume_from=None):
+                checkpoint_dir='./checkpoints', log_interval=50, resume_from=None, force_save_best=False):
     # Create checkpoint directory
     os.makedirs(checkpoint_dir, exist_ok=True)
 
@@ -26,7 +26,8 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
     else:
         # Otherwise, create new step log with header
         with open(step_log_file, 'w') as f:
-            f.write("epoch,global_step,total_loss,spectrum_loss,ssim_loss,rfi_loss,alpha,beta\n")
+            f.write(
+                "epoch,global_step,total_loss,spectrum_loss,ssim_loss,rfi_loss,detection_loss,alpha,beta,gamma,delta\n")
 
     if resume_from and os.path.exists(epoch_log_file):
         # Load existing epoch log
@@ -37,7 +38,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             f.write("epoch,train_loss,valid_loss,epoch_time\n")
 
     # Determine the best validation loss and epoch from epoch log
-    if epoch_log:
+    if not force_save_best and epoch_log:
         valid_epochs = [log for log in epoch_log if log['valid_loss'] is not None]
         if valid_epochs:
             best_log = min(valid_epochs, key=lambda x: x['valid_loss'])
@@ -92,7 +93,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             denoised, rfi_mask, plogits = model(noisy)
 
             # Calculate loss
-            total_loss, spectrum_loss, simm_loss, rfi_loss, detection_loss, current_alpha, current_beta, current_gamma, current_delta = criterion(
+            total_loss, spectrum_loss, ssim_loss, rfi_loss, detection_loss, current_alpha, current_beta, current_gamma, current_delta = criterion(
                 denoised, rfi_mask, plogits, clean, mask, pprob)
             epoch_losses.append(total_loss.item())
 
@@ -105,7 +106,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             train_progress.set_postfix({
                 'loss': total_loss.item(),
                 'spec': spectrum_loss.item(),
-                'ssim': simm_loss.item(),
+                'ssim': ssim_loss.item(),
                 'rfi': rfi_loss.item(),
                 'det': detection_loss.item(),
                 'α': current_alpha,
@@ -119,7 +120,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             if step % log_interval == 0:
                 with open(step_log_file, 'a') as f:
                     f.write(f"{epoch},{criterion.step},{total_loss.item():.6f},"
-                            f"{spectrum_loss.item():.6f},{simm_loss.item():.6f},{rfi_loss.item():.6f},{detection_loss.item():.6f},"
+                            f"{spectrum_loss.item():.6f},{ssim_loss.item():.6f},{rfi_loss.item():.6f},{detection_loss.item():.6f},"
                             f"{current_alpha:.4f},{current_beta:.4f},{current_gamma:.4f},{current_delta:.4f}\n")
 
         train_progress.close()
@@ -160,7 +161,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                 scheduler.step()
 
             # Save best model
-            if valid_loss < best_valid_loss:
+            if valid_loss is not None and (force_save_best or valid_loss < best_valid_loss):
                 best_valid_loss = valid_loss
                 best_epoch = epoch + 1
                 best_model_path = Path(checkpoint_dir) / "best_model.pth"

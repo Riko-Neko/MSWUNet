@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import matplotlib
 
 matplotlib.use('Agg')
@@ -81,7 +82,7 @@ class SETIWaterfallRenderer(QWidget):
 
         # Calculate wraps
         self.folds_per_line = max(1, (self.max_display_width + self.col_spacing) // (
-                    self.subgrid_width + self.col_spacing))
+                self.subgrid_width + self.col_spacing))
         self.num_lines = (self.num_folds + self.folds_per_line - 1) // self.folds_per_line
 
         # Content size
@@ -276,7 +277,7 @@ class SETIWaterfallRenderer(QWidget):
             denoised_np = denoised.squeeze().cpu().numpy()
 
         # Create figure with subplots (denoised on top, hits info below)
-        fig, axs = plt.subplots(2, 1, figsize=(6, 7), gridspec_kw={'height_ratios': [4, 1]})
+        fig, axs = plt.subplots(2, 1, figsize=(6, 5.5), gridspec_kw={'height_ratios': [4, 1]})
         fig.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=0.95, hspace=0.1)  # Minimize margins
 
         # Plot denoised spectrum
@@ -300,7 +301,11 @@ class SETIWaterfallRenderer(QWidget):
         fig.canvas.draw()
         width, height = fig.canvas.get_width_height()
         img = QImage(fig.canvas.buffer_rgba(), width, height, QImage.Format_ARGB32)
-        pixmap = QPixmap.fromImage(img)
+        pixmap = QPixmap.fromImage(img).scaled(270, 250, Qt.KeepAspectRatio)  # Scale pixmap to fit
+
+        # Set pixmap to label
+        self.image_label.setPixmap(pixmap)
+        self.image_label.setFixedSize(270, 250)  # Set fixed size for image label
 
         # Set pixmap to label
         self.image_label.setPixmap(pixmap)
