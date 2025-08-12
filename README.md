@@ -3,15 +3,20 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch 1.10+](https://img.shields.io/badge/PyTorch-1.10+-orange.svg)](https://pytorch.org)
 
-MultiDWTNet is a deep-learning project that implements **DWTNet**, a hybrid model tailored for dynamic-spectrum **denoising** and **radio-frequency interference (RFI) detection**. By seamlessly combining 2-D Discrete Wavelet Transforms (DWT/IDWT) with Convolutional Neural Networks (CNNs), DWTNet captures and reconstructs multi-scale features from time–frequency data with exceptional fidelity.
+MultiDWTNet is a deep-learning project that implements **DWTNet**, a hybrid model tailored for dynamic-spectrum *
+*denoising** and **radio-frequency interference (RFI) detection**. By seamlessly combining 2-D Discrete Wavelet
+Transforms (DWT/IDWT) with Convolutional Neural Networks (CNNs), DWTNet captures and reconstructs multi-scale features
+from time–frequency data with exceptional fidelity.
 
-> ✅ **Link Status**: Repository successfully resolved — [Riko-Neko/MultiDWTNet](https://github.com/Riko-Neko/MultiDWTNet).
+> ✅ **Link Status**: Repository successfully
+> resolved — [Riko-Neko/MultiDWTNet](https://github.com/Riko-Neko/MultiDWTNet).
 
 ---
 
 ## 🔒 Model Code
 
-🚧 Due to the ongoing submission of related research, the core model implementation is currently not included in this repository.
+🚧 Due to the ongoing submission of related research, the core model implementation is currently not included in this
+repository.
 👉 Stay tuned!
 
 ---
@@ -22,12 +27,13 @@ MultiDWTNet is a deep-learning project that implements **DWTNet**, a hybrid mode
   Residual blocks + DWT/IDWT + DenseBlocks for powerful feature extraction and reconstruction.
 
 - **Dual Outputs**  
-  Simultaneously produces  
-  1. Denoised dynamic spectra  
-  2. RFI masks for anomaly detection.
+  Simultaneously produces
+    1. Denoised dynamic spectra
+    2. RFI masks for anomaly detection.
 
 - **Synthetic Data Engine**  
-  Uses [**setigen**](https://setigen.readthedocs.io) to generate realistic dynamic spectra with controllable signals, noise, and RFI—perfect for **radio astronomy** and **SETI**.
+  Uses [**setigen**](https://setigen.readthedocs.io) to generate realistic dynamic spectra with controllable signals,
+  noise, and RFI—perfect for **radio astronomy** and **SETI**.
 
 - **Flexible Training**  
   Adaptive loss functions, built-in checkpointing, and easy hyper-parameter tuning for long-running experiments.
@@ -38,33 +44,34 @@ MultiDWTNet is a deep-learning project that implements **DWTNet**, a hybrid mode
 
 - **Data simulated**
 
-| Type       | Image |
-|------------|-------|
-| Noisy Input | ![noisy](plot/no/noisy_000.png) |
+| Type        | Image                            |
+|-------------|----------------------------------|
+| Noisy Input | ![noisy](plot/no/noisy_000.png)  |
 | Clean Input | ![clean](plot/sim/clean_000.png) |
 
 - **Example working effect**
 
-<p align="center">
-  <img src="pred_results/plots/DWTNet/pred_0000.png" width="30%" />
-  <img src="pred_results/plots/DWTNet/pred_0001.png" width="30%" />
-  <img src="pred_results/plots/DWTNet/pred_0002.png" width="30%" />
+<p style="text-align: center;">
+  <img src="pred_results/plots/DWTNet/pred_0000.png" height="300">
+  <img src="pred_results/plots/DWTNet/pred_0001.png" height="300">
+  <img src="pred_results/plots/DWTNet/pred_0002.png" height="300">
 </p>
 
-*The five-layer visualization includes (from top to bottom): clean simulation, noisy input, interference mask, denoised output, and the final generated map.*
+*The five-layer visualization includes (from top to bottom): clean simulation, noisy input, interference mask, denoised
+output, and the final generated map.*
 
 
 ---
 
 ## Model Architecture
 
-| Component | Description |
-|-----------|-------------|
-| **Encoder** | Residual blocks + DWT down-sampling (LP & HP coefficients). |
-| **Bottleneck** | Depth-wise separable convolutions for deeper feature maps. |
-| **Decoder (Dual-Branch)** | |
-| &nbsp;&nbsp;&nbsp;&nbsp;Denoising Branch | IDWT + residual blocks → clean spectrum. |
-| &nbsp;&nbsp;&nbsp;&nbsp;RFI Mask Branch | Dense blocks + up-sampling → pixel-wise RFI mask. |
+| Component                                | Description                                                 |
+|------------------------------------------|-------------------------------------------------------------|
+| **Encoder**                              | Residual blocks + DWT down-sampling (LP & HP coefficients). |
+| **Bottleneck**                           | Depth-wise separable convolutions for deeper feature maps.  |
+| **Decoder (Dual-Branch)**                |                                                             |
+| &nbsp;&nbsp;&nbsp;&nbsp;Denoising Branch | IDWT + residual blocks → clean spectrum.                    |
+| &nbsp;&nbsp;&nbsp;&nbsp;RFI Mask Branch  | Dense blocks + up-sampling → pixel-wise RFI mask.           |
 
 ---
 
@@ -114,10 +121,10 @@ python pred.py
 
 ## Scripts
 
-| File        | Purpose |
-|-------------|---------|
-| `main.py`   | End-to-end training, validation, checkpointing. |
-| `pred.py`   | Load trained weights, generate predictions, save plots. |
+| File      | Purpose                                                 |
+|-----------|---------------------------------------------------------|
+| `main.py` | End-to-end training, validation, checkpointing.         |
+| `pred.py` | Load trained weights, generate predictions, save plots. |
 
 ---
 
