@@ -51,12 +51,11 @@ repository.
 
 - **Example working effect**
 
-<p style="text-align: center;">
-  <img src="pred_results/plots/DWTNet/pred_0000.png" height="300">
-  <img src="pred_results/plots/DWTNet/pred_0001.png" height="300">
-  <img src="pred_results/plots/DWTNet/pred_0002.png" height="300">
+<p align="center">
+  <img src="pred_results/plots/DWTNet/pred_0000.png" width="30%" />
+  <img src="pred_results/plots/DWTNet/pred_0001.png" width="30%" />
+  <img src="pred_results/plots/DWTNet/pred_0002.png" width="30%" />
 </p>
-
 *The five-layer visualization includes (from top to bottom): clean simulation, noisy input, interference mask, denoised
 output, and the final generated map.*
 
