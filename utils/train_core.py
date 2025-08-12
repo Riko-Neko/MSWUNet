@@ -26,8 +26,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
     else:
         # Otherwise, create new step log with header
         with open(step_log_file, 'w') as f:
-            f.write(
-                "epoch,global_step,total_loss,spectrum_loss,ssim_loss,rfi_loss,detection_loss,alpha,beta,gamma,delta\n")
+            f.write("epoch,global_step,total_loss,spectrum_loss,ssim_loss,rfi_loss,detection_loss,alpha,beta,gamma,delta\n")
 
     if resume_from and os.path.exists(epoch_log_file):
         # Load existing epoch log
@@ -38,15 +37,12 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             f.write("epoch,train_loss,valid_loss,epoch_time\n")
 
     # Determine the best validation loss and epoch from epoch log
-    if not force_save_best and epoch_log:
+    best_valid_loss = float('inf')
+    if epoch_log and not (resume_from and force_save_best):
         valid_epochs = [log for log in epoch_log if log['valid_loss'] is not None]
         if valid_epochs:
             best_log = min(valid_epochs, key=lambda x: x['valid_loss'])
             best_valid_loss = best_log['valid_loss']
-        else:
-            best_valid_loss = float('inf')
-    else:
-        best_valid_loss = float('inf')
 
     # Load checkpoint if resuming
     start_epoch = 0
@@ -63,6 +59,9 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             print("[\033[32mInfo\033[0m] Optimizer state loaded.")
         except Exception as e:
             print(f"[\033[33mWarning\033[0m]: failed to load optimizer state: {e}")
+        if force_save_best:
+            print("[\033[32mInfo\033[0m] Forcing best model save with reset validation loss.")
+            best_valid_loss = float('inf')  # Reset best validation loss when resuming with force_save_best
     else:
         print("[\033[32mInfo\033[0m] Starting training from scratch.")
 
@@ -161,7 +160,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                 scheduler.step()
 
             # Save best model
-            if valid_loss is not None and (force_save_best or valid_loss < best_valid_loss):
+            if valid_loss is not None and valid_loss < best_valid_loss:
                 best_valid_loss = valid_loss
                 best_epoch = epoch + 1
                 best_model_path = Path(checkpoint_dir) / "best_model.pth"
