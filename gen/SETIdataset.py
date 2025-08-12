@@ -56,6 +56,9 @@ class DynamicSpectrumDataset(Dataset):
         if np.random.random() < 0.01:
             n_signals += 1  # 1% 的概率增加一个SETI信号
 
+        if np.random.random() < 0.1:  # 10% 的概率不生成任何信号
+            n_signals = 0
+
         # 生成判据
         if n_signals == 0:
             phy_prob = 0.

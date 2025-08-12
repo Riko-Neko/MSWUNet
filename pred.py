@@ -35,9 +35,9 @@ def main(mode=None, ui=False, *args):
     pred_dataset = DynamicSpectrumDataset(tchans=144, fchans=1024, df=7.5, dt=10.0, fch1=None, ascending=False,
                                           drift_min=-1.0, drift_max=1.0,
                                           snr_min=10.0, snr_max=20.0,
-                                          width_min=5, width_max=7.5,
-                                          num_signals=(1, 1),
-                                          noise_std_min=0.05, noise_std_max=0.1)
+                                          width_min=10, width_max=15,
+                                          num_signals=(0, 1),
+                                          noise_std_min=0.025, noise_std_max=0.05)
 
     # Create data loaders
     pred_dataloader = DataLoader(pred_dataset, batch_size=1, num_workers=1, pin_memory=True)

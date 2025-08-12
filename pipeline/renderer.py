@@ -1,11 +1,13 @@
 from pathlib import Path
+import matplotlib
 
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import torch
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor, QPainter, QImage, QPixmap
 from PyQt5.QtWidgets import (QWidget, QToolTip, QLabel,
-                             QVBoxLayout, QHBoxLayout, QPushButton)
+                             QVBoxLayout, QHBoxLayout, QPushButton, QScrollArea)
 
 from pipeline.metrics import execute_hits
 from pipeline.pipeline_processor import SETIPipelineProcessor
@@ -38,10 +40,6 @@ class SETIWaterfallRenderer(QWidget):
         self.tsamp = self.processor.tsamp
         self.foff = self.processor.foff
 
-        # Set window size, leaving space for information panel on the right
-        self.setFixedSize(self.grid_width * self.cell_size + 300,
-                          self.grid_height * self.cell_size)
-
         # Use processor's storage
         self.cell_status = self.processor.cell_status
         self.confidence_scores = self.processor.confidence_scores
@@ -59,34 +57,85 @@ class SETIWaterfallRenderer(QWidget):
         self.image_label.hide()
         self.last_click_pos = None
 
-        # Create information panel on the right
-        self.create_info_panel()
+        # Layout parameters
+        self.min_display_height = 400  # Minimum display height in pixels
+        self.max_display_height = 1200  # Maximum display height before folding or scrolling
+        self.max_display_width = 900  # Maximum display width before wrapping
+        self.col_spacing = 20  # Spacing between folded subgrids in a visual row
+        self.row_spacing = 10  # Spacing between visual rows of subgrids
 
-        # Setup processing timer
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.process_next_cell)
-        self.timer.start(50)  # Processing speed in milliseconds
+        # Folding type
+        self.folding_type = 'vertical'
 
-        self.setMouseTracking(True)  # Enable mouse tracking for tooltips
+        # Calculate layout for frequency direction (vertical folding for tall grids)
+        original_height = self.grid_height * self.cell_size
+        self.rows_per_fold = self.max_display_height // self.cell_size
+        if original_height > self.max_display_height:
+            self.num_folds = (self.grid_height + self.rows_per_fold - 1) // self.rows_per_fold
+        else:
+            self.num_folds = 1
+            self.rows_per_fold = self.grid_height
 
-    def create_info_panel(self):
-        """Create the information panel on the right side of the window"""
-        right_panel = QWidget(self)
-        right_panel.setGeometry(self.grid_width * self.cell_size, 0, 300, self.height())
-        layout = QVBoxLayout(right_panel)
+        self.subgrid_width = self.grid_width * self.cell_size
+        self.subgrid_height = self.rows_per_fold * self.cell_size  # Max per fold
+
+        # Calculate wraps
+        self.folds_per_line = max(1, (self.max_display_width + self.col_spacing) // (
+                    self.subgrid_width + self.col_spacing))
+        self.num_lines = (self.num_folds + self.folds_per_line - 1) // self.folds_per_line
+
+        # Content size
+        content_width = self.folds_per_line * self.subgrid_width + max(0, self.folds_per_line - 1) * self.col_spacing
+        content_height = self.num_lines * self.subgrid_height + max(0, self.num_lines - 1) * self.row_spacing
+
+        # Handle min height: if content_height < min, adjust (for now, just set min, but add logic if needed)
+        if original_height < self.min_display_height and self.grid_width * self.cell_size > self.max_display_width / 2:
+            # Optional: If height too small and width large, fold horizontally to make taller
+            # For symmetry, split columns if width large and height small
+            self.cols_per_fold = self.max_display_width // self.cell_size
+            num_stacks = (self.grid_width + self.cols_per_fold - 1) // self.cols_per_fold
+            if num_stacks > 1:
+                self.folding_type = 'horizontal'
+                self.subgrid_height = self.grid_height * self.cell_size
+                self.subgrid_width = self.cols_per_fold * self.cell_size
+                self.num_folds = num_stacks
+                self.rows_per_fold = self.grid_height  # Full height
+                self.folds_per_line = 1  # Stack vertically
+                self.num_lines = num_stacks
+                content_width = self.subgrid_width
+                content_height = num_stacks * self.subgrid_height + (num_stacks - 1) * self.row_spacing
+        else:
+            # If still < min after calc, could scale or center, but for now proceed
+            pass
+
+        # Main layout
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Scroll area for grid
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setWidgetResizable(False)
+        self.grid_content = GridContent(self, content_width, content_height)
+        self.scroll_area.setWidget(self.grid_content)
+        main_layout.addWidget(self.scroll_area, stretch=1)
+
+        # Info panel
+        self.info_panel = QWidget(self)
+        self.info_panel.setFixedWidth(300)
+        info_layout = QVBoxLayout(self.info_panel)
 
         # Title label
         title = QLabel("SETI Waterfall Processor")
         title.setStyleSheet("font-weight: bold; font-size: 16px;")
-        layout.addWidget(title)
+        info_layout.addWidget(title)
 
         # Processing status label
         self.status_label = QLabel("Processing...")
-        layout.addWidget(self.status_label)
+        info_layout.addWidget(self.status_label)
 
         # Progress percentage label
         self.progress_label = QLabel("Progress: 0%")
-        layout.addWidget(self.progress_label)
+        info_layout.addWidget(self.progress_label)
 
         # Statistics display
         stats_layout = QHBoxLayout()
@@ -94,11 +143,11 @@ class SETIWaterfallRenderer(QWidget):
         self.detections_label = QLabel("Detections: 0")
         stats_layout.addWidget(self.processed_label)
         stats_layout.addWidget(self.detections_label)
-        layout.addLayout(stats_layout)
+        info_layout.addLayout(stats_layout)
 
         # Confidence threshold slider info
         self.confidence_label = QLabel("Confidence Threshold: 0.8")
-        layout.addWidget(self.confidence_label)
+        info_layout.addWidget(self.confidence_label)
 
         # Control buttons
         btn_layout = QHBoxLayout()
@@ -110,12 +159,24 @@ class SETIWaterfallRenderer(QWidget):
         reset_btn = QPushButton("Reset")
         reset_btn.clicked.connect(self.reset_grid)
         btn_layout.addWidget(reset_btn)
-        layout.addLayout(btn_layout)
+        info_layout.addLayout(btn_layout)
 
         # Image display section
-        layout.addWidget(QLabel("Cell Detail:"))
-        layout.addWidget(self.image_label)
-        layout.addStretch()
+        info_layout.addWidget(QLabel("Cell Detail:"))
+        info_layout.addWidget(self.image_label)
+        info_layout.addStretch()
+
+        main_layout.addWidget(self.info_panel)
+
+        # Set initial window size to enable scrolling if necessary
+        self.resize(content_width + 300, min(content_height, 800))
+
+        # Setup processing timer
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.process_next_cell)
+        self.timer.start(50)  # Processing speed in milliseconds
+
+        self.setMouseTracking(True)  # Enable mouse tracking for tooltips
 
     def toggle_pause(self, paused):
         """
@@ -142,7 +203,7 @@ class SETIWaterfallRenderer(QWidget):
         self.confidence_scores = [[0.0 for _ in range(self.grid_width)]
                                   for _ in range(self.grid_height)]
         self.image_label.hide()
-        self.update()
+        self.grid_content.update()
         self.timer.start(50)
         self.pause_btn.setChecked(False)
         self.pause_btn.setText("Pause")
@@ -164,7 +225,7 @@ class SETIWaterfallRenderer(QWidget):
                 self.current_col = 0
                 self.current_row += 1
 
-            self.update()  # Trigger repaint
+            self.grid_content.update()  # Trigger repaint
         else:
             self.timer.stop()
             self.status_label.setText("Processing Complete!")
@@ -192,112 +253,6 @@ class SETIWaterfallRenderer(QWidget):
 
         self.processed_label.setText(f"Processed: {processed}")
         self.detections_label.setText(f"Detections: {detections}")
-
-    def paintEvent(self, event):
-        """
-        Paint the grid based on cell status and confidence
-
-        Args:
-            event: Paint event object
-        """
-        painter = QPainter(self)
-
-        # Iterate through all cells
-        for row in range(self.grid_height):
-            for col in range(self.grid_width):
-                rect_x = col * self.cell_size
-                rect_y = row * self.cell_size
-
-                # Determine cell color based on status and confidence
-                status = self.cell_status[row][col]
-                confidence = self.confidence_scores[row][col]
-
-                if status is None:  # Not processed or uncertain
-                    color = QColor(30, 30, 30)  # Dark gray
-                elif status is True:  # Signal detected
-                    if confidence > 0.8:
-                        color = QColor(0, 200, 0)  # Green (high confidence)
-                    else:
-                        color = QColor(200, 200, 0)  # Yellow (medium confidence)
-                else:  # No signal
-                    if confidence < 0.2:
-                        color = QColor(200, 0, 0)  # Red (high confidence)
-                    else:
-                        color = QColor(200, 200, 0)  # Yellow (medium confidence)
-
-                # Fill cell with appropriate color
-                painter.fillRect(rect_x, rect_y, self.cell_size, self.cell_size, color)
-
-                # Draw cell border
-                painter.setPen(QColor(60, 60, 60))
-                painter.drawRect(rect_x, rect_y, self.cell_size, self.cell_size)
-
-    def mouseMoveEvent(self, event):
-        """
-        Handle mouse movement to show tooltips with frequency information
-
-        Args:
-            event: Mouse event object
-        """
-        pos = event.pos()
-        col = pos.x() // self.cell_size
-        row = pos.y() // self.cell_size
-
-        # Show tooltip only when inside grid boundaries
-        if 0 <= col < self.grid_width and 0 <= row < self.grid_height:
-            status = self.cell_status[row][col]
-            confidence = self.confidence_scores[row][col]
-            freq_min, freq_max = self.freq_ranges[row][col]
-            time_start, time_end = self.time_ranges[row][col]
-
-            if status is None:
-                status_str = "Not processed"
-                if confidence > 0:  # If processed but uncertain
-                    status_str = f"Uncertain (Confidence: {confidence:.2f})"
-            elif status is True:
-                status_str = f"Signal detected (Confidence: {confidence:.2f})"
-            else:
-                status_str = f"No signal (Confidence: {confidence:.2f})"
-
-            tooltip = (f"Cell ({col}, {row})\n"
-                       f"Status: {status_str}\n"
-                       f"Frequency: {freq_min:.4f} - {freq_max:.4f} MHz\n"
-                       f"Time: {time_start:.2f} - {time_end:.2f} seconds")
-
-            QToolTip.showText(event.globalPos(), tooltip)
-
-    def mousePressEvent(self, event):
-        """
-        Handle mouse clicks to show cell details and denoised spectrum
-
-        Args:
-            event: Mouse event object
-        """
-        pos = event.pos()
-        col = pos.x() // self.cell_size
-        row = pos.y() // self.cell_size
-
-        # Ensure click is within grid boundaries
-        if not (0 <= col < self.grid_width and 0 <= row < self.grid_height):
-            self.image_label.hide()
-            return
-
-        # Only show details for processed cells
-        if self.cell_status[row][col] is not None:
-            self.last_click_pos = (row, col)
-            self.show_cell_detail(row, col)
-
-            # Position image centered around click position
-            img_size = self.image_label.size()
-            img_x = max(0, min(pos.x() - img_size.width() // 2,
-                               self.width() - img_size.width()))
-            img_y = max(0, min(pos.y() - img_size.height() // 2,
-                               self.height() - img_size.height()))
-
-            self.image_label.move(img_x, img_y)
-            self.image_label.show()
-        else:
-            self.image_label.hide()
 
     def show_cell_detail(self, row, col):
         """
@@ -371,7 +326,7 @@ class SETIWaterfallRenderer(QWidget):
             tsamp=self.tsamp,
             foff=self.foff,
             max_drift=4.0,
-            min_drift=0.0,
+            min_drift=0.1,
             snr_threshold=10.0
         )
 
@@ -379,3 +334,204 @@ class SETIWaterfallRenderer(QWidget):
             return "No hits detected."
         else:
             return "Detected Hits:\n" + df_hits.to_string(index=False)
+
+
+class GridContent(QWidget):
+    def __init__(self, parent, content_width, content_height):
+        super().__init__(parent)
+        self.renderer = parent
+        self.setFixedSize(content_width, content_height)
+        self.setMouseTracking(True)
+
+    def paintEvent(self, event):
+        """
+        Paint the grid based on cell status and confidence, with folding and wrapping
+        """
+        painter = QPainter(self)
+
+        if self.renderer.folding_type == 'vertical':
+            for fold_i in range(self.renderer.num_folds):
+                visual_col = fold_i % self.renderer.folds_per_line
+                visual_row = fold_i // self.renderer.folds_per_line
+
+                subgrid_x = visual_col * (self.renderer.subgrid_width + self.renderer.col_spacing)
+                subgrid_y = visual_row * (self.renderer.subgrid_height + self.renderer.row_spacing)
+
+                start_row = fold_i * self.renderer.rows_per_fold
+                end_row = min(start_row + self.renderer.rows_per_fold, self.renderer.grid_height)
+
+                for r in range(start_row, end_row):
+                    visual_r = r - start_row
+                    for c in range(self.renderer.grid_width):
+                        rect_x = subgrid_x + c * self.renderer.cell_size
+                        rect_y = subgrid_y + visual_r * self.renderer.cell_size
+
+                        # Determine cell color based on status and confidence
+                        status = self.renderer.cell_status[r][c]
+                        confidence = self.renderer.confidence_scores[r][c]
+
+                        if status is None:  # Not processed or uncertain
+                            color = QColor(30, 30, 30)  # Dark gray
+                        elif status is True:  # Signal detected
+                            if confidence > 0.8:
+                                color = QColor(0, 200, 0)  # Green (high confidence)
+                            else:
+                                color = QColor(200, 200, 0)  # Yellow (medium confidence)
+                        else:  # No signal
+                            if confidence < 0.2:
+                                color = QColor(200, 0, 0)  # Red (high confidence)
+                            else:
+                                color = QColor(200, 200, 0)  # Yellow (medium confidence)
+
+                        # Fill cell with appropriate color
+                        painter.fillRect(rect_x, rect_y, self.renderer.cell_size, self.renderer.cell_size, color)
+
+                        # Draw cell border
+                        painter.setPen(QColor(60, 60, 60))
+                        painter.drawRect(rect_x, rect_y, self.renderer.cell_size, self.renderer.cell_size)
+        elif self.renderer.folding_type == 'horizontal':
+            for fold_i in range(self.renderer.num_folds):
+                visual_col = fold_i % self.renderer.folds_per_line
+                visual_row = fold_i // self.renderer.folds_per_line
+
+                subgrid_x = visual_col * (self.renderer.subgrid_width + self.renderer.col_spacing)
+                subgrid_y = visual_row * (self.renderer.subgrid_height + self.renderer.row_spacing)
+
+                start_col = fold_i * self.renderer.cols_per_fold
+                end_col = min(start_col + self.renderer.cols_per_fold, self.renderer.grid_width)
+
+                for r in range(self.renderer.grid_height):
+                    for c in range(start_col, end_col):
+                        visual_c = c - start_col
+                        rect_x = subgrid_x + visual_c * self.renderer.cell_size
+                        rect_y = subgrid_y + r * self.renderer.cell_size
+
+                        # Determine cell color based on status and confidence
+                        status = self.renderer.cell_status[r][c]
+                        confidence = self.renderer.confidence_scores[r][c]
+
+                        if status is None:  # Not processed or uncertain
+                            color = QColor(30, 30, 30)  # Dark gray
+                        elif status is True:  # Signal detected
+                            if confidence > 0.8:
+                                color = QColor(0, 200, 0)  # Green (high confidence)
+                            else:
+                                color = QColor(200, 200, 0)  # Yellow (medium confidence)
+                        else:  # No signal
+                            if confidence < 0.2:
+                                color = QColor(200, 0, 0)  # Red (high confidence)
+                            else:
+                                color = QColor(200, 200, 0)  # Yellow (medium confidence)
+
+                        # Fill cell with appropriate color
+                        painter.fillRect(rect_x, rect_y, self.renderer.cell_size, self.renderer.cell_size, color)
+
+                        # Draw cell border
+                        painter.setPen(QColor(60, 60, 60))
+                        painter.drawRect(rect_x, rect_y, self.renderer.cell_size, self.renderer.cell_size)
+
+    def mouseMoveEvent(self, event):
+        """
+        Handle mouse movement to show tooltips with frequency information
+        """
+        pos = event.pos()
+        fold_i, r, c = self.map_to_grid(pos.x(), pos.y())
+        if fold_i is not None:
+            status = self.renderer.cell_status[r][c]
+            confidence = self.renderer.confidence_scores[r][c]
+            freq_min, freq_max = self.renderer.freq_ranges[r][c]
+            time_start, time_end = self.renderer.time_ranges[r][c]
+
+            if status is None:
+                status_str = "Not processed"
+                if confidence > 0:  # If processed but uncertain
+                    status_str = f"Uncertain (Confidence: {confidence:.2f})"
+            elif status is True:
+                status_str = f"Signal detected (Confidence: {confidence:.2f})"
+            else:
+                status_str = f"No signal (Confidence: {confidence:.2f})"
+
+            tooltip = (f"Cell ({c}, {r})\n"
+                       f"Status: {status_str}\n"
+                       f"Frequency: {freq_min:.4f} - {freq_max:.4f} MHz\n"
+                       f"Time: {time_start:.2f} - {time_end:.2f} seconds")
+
+            QToolTip.showText(event.globalPos(), tooltip)
+
+    def mousePressEvent(self, event):
+        """
+        Handle mouse clicks to show cell details and denoised spectrum
+        """
+        pos = event.pos()
+        fold_i, r, c = self.map_to_grid(pos.x(), pos.y())
+        if fold_i is not None and self.renderer.cell_status[r][c] is not None:
+            self.renderer.last_click_pos = (r, c)
+            self.renderer.show_cell_detail(r, c)
+
+            # Position image relative to click, but clamped within window
+            img_size = self.renderer.image_label.size()
+            viewport_pos = self.renderer.scroll_area.mapFromGlobal(event.globalPos())
+            img_x = max(0, min(viewport_pos.x() - img_size.width() // 2,
+                               self.renderer.scroll_area.width() - img_size.width()))
+            img_y = max(0, min(viewport_pos.y() - img_size.height() // 2,
+                               self.renderer.scroll_area.height() - img_size.height()))
+
+            self.renderer.image_label.move(img_x, img_y)
+            self.renderer.image_label.raise_()
+            self.renderer.image_label.show()
+        else:
+            self.renderer.image_label.hide()
+
+    def map_to_grid(self, x, y):
+        """
+        Map pixel position to grid row and column, considering folds and wraps
+
+        Returns:
+            fold_i, row, col or None, None, None if out of bounds
+        """
+        if self.renderer.folding_type == 'vertical':
+            for fold_i in range(self.renderer.num_folds):
+                visual_col = fold_i % self.renderer.folds_per_line
+                visual_row = fold_i // self.renderer.folds_per_line
+
+                subgrid_x = visual_col * (self.renderer.subgrid_width + self.renderer.col_spacing)
+                subgrid_y = visual_row * (self.renderer.subgrid_height + self.renderer.row_spacing)
+
+                if subgrid_x <= x < subgrid_x + self.renderer.subgrid_width and \
+                        subgrid_y <= y < subgrid_y + self.renderer.subgrid_height:
+
+                    local_x = x - subgrid_x
+                    local_y = y - subgrid_y
+
+                    c = local_x // self.renderer.cell_size
+                    visual_r = local_y // self.renderer.cell_size
+
+                    if 0 <= c < self.renderer.grid_width:
+                        start_row = fold_i * self.renderer.rows_per_fold
+                        r = start_row + visual_r
+                        if start_row <= r < min(start_row + self.renderer.rows_per_fold, self.renderer.grid_height):
+                            return fold_i, r, c
+        elif self.renderer.folding_type == 'horizontal':
+            for fold_i in range(self.renderer.num_folds):
+                visual_col = fold_i % self.renderer.folds_per_line
+                visual_row = fold_i // self.renderer.folds_per_line
+
+                subgrid_x = visual_col * (self.renderer.subgrid_width + self.renderer.col_spacing)
+                subgrid_y = visual_row * (self.renderer.subgrid_height + self.renderer.row_spacing)
+
+                if subgrid_x <= x < subgrid_x + self.renderer.subgrid_width and \
+                        subgrid_y <= y < subgrid_y + self.renderer.subgrid_height:
+
+                    local_x = x - subgrid_x
+                    local_y = y - subgrid_y
+
+                    visual_c = local_x // self.renderer.cell_size
+                    r = local_y // self.renderer.cell_size
+
+                    if 0 <= r < self.renderer.grid_height:
+                        start_col = fold_i * self.renderer.cols_per_fold
+                        c = start_col + visual_c
+                        if start_col <= c < min(start_col + self.renderer.cols_per_fold, self.renderer.grid_width):
+                            return fold_i, r, c
+
+        return None, None, None

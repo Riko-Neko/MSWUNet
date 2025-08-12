@@ -101,7 +101,7 @@ class SETIPipelineProcessor:
                     tsamp=self.tsamp,
                     foff=self.foff,
                     max_drift=4.0,
-                    min_drift=0.0,
+                    min_drift=0.1,
                     snr_threshold=10.0
                 )
                 hits_info = df_hits.to_string(index=False) if not df_hits.empty else "No hits detected."
