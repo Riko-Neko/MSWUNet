@@ -1,6 +1,7 @@
 import numpy as np
 
-def add_rfi(clean_spec, rfi_params, noise_std = 0.0):
+
+def add_rfi(clean_spec, rfi_params, noise_std=0.0):
     """
     Add RFI to the clean spectrum and create an RFI mask.
 

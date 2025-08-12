@@ -11,7 +11,7 @@ from gen.SETIgen import sim_dynamic_spec_seti
 class DynamicSpectrumDataset(Dataset):
     def __init__(self,
                  tchans=224, fchans=224, df=1.0, dt=1.0, fch1=None, ascending=False,
-                 drift_min=-2.0, drift_max=2.0,
+                 drift_min=-2.0, drift_max=2.0, drift_min_abs=0.2,
                  snr_min=10.0, snr_max=30.0,
                  width_min=1.0, width_max=5.0,
                  num_signals=(0, 1),
@@ -22,6 +22,7 @@ class DynamicSpectrumDataset(Dataset):
         参数:
             tchans, fchans, df, dt, fch1, ascending: 与动态频谱函数对应的频谱尺寸参数
             drift_min, drift_max: 漂移率范围 (Hz/s)
+            drift_min_abs: 最小绝对漂移率 (Hz/s)，确保信号漂移率绝对值不低于此值
             snr_min, snr_max: 信噪比范围
             width_min, width_max: 频谱宽度范围 (Hz)
             num_signals: 信号个数范围 (min, max)
@@ -35,6 +36,7 @@ class DynamicSpectrumDataset(Dataset):
         self.ascending = ascending
         self.drift_min = drift_min
         self.drift_max = drift_max
+        self.drift_min_abs = drift_min_abs
         self.snr_min = snr_min
         self.snr_max = snr_max
         self.width_min = width_min
@@ -72,7 +74,11 @@ class DynamicSpectrumDataset(Dataset):
                                        weights=[0.35, 0.2, 0.35, 0.1])[0]
             # 默认信号参数
             margin = int(0.2 * self.fchans)
-            drift_rate = random.uniform(self.drift_min, self.drift_max)
+            # 随机漂移率，确保绝对值不低于 drift_min_abs
+            while True:
+                drift_rate = random.uniform(self.drift_min, self.drift_max)
+                if abs(drift_rate) >= self.drift_min_abs:
+                    break
             if drift_rate < 0:
                 f_index = self.fchans // 2 + np.random.randint(0, self.fchans // 2 - margin)
             else:
@@ -91,20 +97,17 @@ class DynamicSpectrumDataset(Dataset):
                 'path': path_type,
                 't_profile': random.choices(
                     ['pulse', 'sine', 'constant'], weights=[0.25, 0.25, 0.5], k=1)[0],
-                # 't_profile': 'constant',
-                'f_profile':
-                    random.choices(['gaussian', 'box', 'sinc', 'lorentzian', 'voigt'],
-                                   weights=[0.3, 0.2, 0.2, 0.15, 0.15],
-                                   k=1)[0],
+                'f_profile': random.choices(
+                    ['gaussian', 'box', 'sinc', 'lorentzian', 'voigt'],
+                    weights=[0.3, 0.2, 0.2, 0.15, 0.15],
+                    k=1)[0],
                 # rfi 相关参数
                 'rfi_type': random.choice(['stationary', 'random_walk']),
                 'spread_type': random.choice(['uniform', 'normal']),
                 'spread': random.choices(
                     [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 7.5, 10.0, 15.0, 20.0, 25.0]),
                 # sine 相关参数
-                # squared 相关参数
                 'squared_drift': drift_rate * 5.e-4
-
             }
 
             # 路径类型特定参数
@@ -131,7 +134,13 @@ class DynamicSpectrumDataset(Dataset):
             'NBT': np.random.randint(max(1, self.tchans // 128), self.tchans // 64),
             'NBT_amp': np.random.uniform(2.5, 5),
             'BBT': np.random.randint(max(1, self.fchans // 512), self.fchans // 256),
-            'BBT_amp': np.random.uniform(1.25, 5)
+            'BBT_amp': np.random.uniform(1.25, 5),
+            'LowDrift': np.random.randint(1, 6),
+            'LowDrift_amp': np.random.uniform(1.25, 5),
+            'LowDrift_width': np.random.uniform(7.5, 15),
+            'NegBand': np.random.randint(1, 2),
+            'NegBand_amp': np.random.uniform(0.25, 0.75),
+            'NegBand_width': np.random.uniform(0.3e6, 0.7e6)
         }
 
         # 生成动态频谱样本
@@ -219,13 +228,17 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None):
 
 
 if __name__ == "__main__":
-    dataset = DynamicSpectrumDataset(tchans=128, fchans=1024, df=7.5, dt=10.0, fch1=None, ascending=False,
-                                     drift_min=-1.0, drift_max=1.0,
-                                     snr_min=10.0, snr_max=20.0,
-                                     width_min=5, width_max=7.5,
-                                     num_signals=(1, 1),
-                                     noise_std_min=0.05, noise_std_max=0.1
-                                     )
+    tchans = 144
+    fchans = 1024
+    df = 7.5
+    dt = 1.0
+    drift_min = -4.0
+    drift_max = 4.0
+    drift_min_abs = df // (tchans * dt)
+    dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
+                                     drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.2,
+                                     snr_min=10.0, snr_max=20.0, width_min=10, width_max=15, num_signals=(1, 1),
+                                     noise_std_min=0.025, noise_std_max=0.05)
 
     """
     参数生成 Refs:
@@ -240,6 +253,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    plot_samples(dataset, kind='clean', num=10)
-    # plot_samples(dataset, kind='noisy', num=10)
-    # plot_samples(dataset, kind='mask', num=10)
+    plot_samples(dataset, kind='clean', num=30)
+    plot_samples(dataset, kind='noisy', num=30)
+    plot_samples(dataset, kind='mask', num=30)

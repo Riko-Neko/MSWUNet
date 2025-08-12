@@ -60,15 +60,15 @@ def main():
     train_dataset = DynamicSpectrumDataset(tchans=144, fchans=1024, df=7.5, dt=1.0, fch1=None, ascending=False,
                                            drift_min=-1.0, drift_max=1.0,
                                            snr_min=10.0, snr_max=20.0,
-                                           width_min=5, width_max=7.5,
+                                           width_min=10, width_max=15,
                                            num_signals=(0, 1),
-                                           noise_std_min=0.05, noise_std_max=0.1)
+                                           noise_std_min=0.025, noise_std_max=0.5)
     valid_dataset = DynamicSpectrumDataset(tchans=144, fchans=1024, df=7.5, dt=1.0, fch1=None, ascending=False,
                                            drift_min=-1.0, drift_max=1.0,
                                            snr_min=10.0, snr_max=20.0,
-                                           width_min=5, width_max=7.5,
+                                           width_min=10, width_max=15,
                                            num_signals=(0, 1),
-                                           noise_std_min=0.05, noise_std_max=0.1)
+                                           noise_std_min=0.025, noise_std_max=0.5)
 
     # Create data loaders
     train_dataloader = DataLoader(

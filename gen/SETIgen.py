@@ -13,7 +13,6 @@ except:
 import matplotlib.pyplot as plt
 from gen.FRIgen import add_rfi
 
-
 def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
                           signals=None,
                           noise_x_mean=0.0, noise_x_std=1.0, noise_type='normal',
@@ -80,12 +79,19 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
                 - 'NBT_amp': 窄带瞬态RFI幅度倍数
                 - 'BBT': 宽带瞬态RFI数量
                 - 'BBT_amp': 宽带瞬态RFI幅度倍数
+                - 'LowDrift': 低漂移率RFI数量
+                - 'LowDrift_amp': 低漂移率RFI幅度倍数
+                - 'LowDrift_width': 低漂移率RFI宽度(Hz)
+                - 'NegBand': 负高斯轮廓数量
+                - 'NegBand_amp': 负高斯轮廓幅度倍数
+                - 'NegBand_width': 负高斯轮廓宽度(Hz)
 
             seed (int, optional): 随机数生成器种子（保证结果可重现）
             plot (bool): 是否生成可视化图像（默认False）
             plot_filename (str, optional): 图像保存路径（若提供则保存）
 
         返回:
+            signal_spec (numpy.ndarray): 含信号和噪声的动态频谱，形状为(tchans, fchans)
             clean_spec (numpy.ndarray): 纯净动态频谱（不含RFI和噪声），形状为(tchans, fchans)
             noisy_spec (numpy.ndarray): 含RFI和噪声的动态频谱，形状为(tchans, fchans)
             rfi_mask (numpy.ndarray): RFI位置布尔掩码，形状为(tchans, fchans)
@@ -107,7 +113,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
                     'l_width': 2.0
                 }
             ]
-        """
+    """
     # 固定随机种子
     if seed is not None:
         np.random.seed(seed)
@@ -212,11 +218,45 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
             bp_profile = stg.constant_bp_profile(level=1.0)
             clean_spec += frame.add_signal(path, t_profile, f_profile, bp_profile)
 
+    # 初始化 RFI 掩码
+    rfi_mask = np.zeros_like(frame.data, dtype=bool)
+
+    # 添加低漂移率 RFI（使用 setigen，constant 类型）
+    if rfi_params:
+        for _ in range(rfi_params.get('LowDrift', 0)):
+            f_index = np.random.randint(0, fchans)
+            f_start = frame.get_frequency(f_index)
+            drift_rate = np.random.uniform(-0.0001, 0.0001) * u.Hz / u.s
+            path = stg.constant_path(f_start=f_start, drift_rate=drift_rate)
+            level = rfi_params.get('LowDrift_amp', 5.0) * noise_x_std
+            t_profile = stg.constant_t_profile(level=level)
+            width = rfi_params.get('LowDrift_width', 2.0) * u.Hz
+            f_profile = stg.gaussian_f_profile(width=width)
+            bp_profile = stg.constant_bp_profile(1.0)
+            added_signal = frame.add_signal(path, t_profile, f_profile, bp_profile)
+            rfi_mask |= (added_signal > 0.1 * level)
+
+        # 添加负噪声带（负高斯轮廓），但不更新 RFI 掩码
+        for _ in range(rfi_params.get('NegBand', 0)):
+            f_index = np.random.randint(0, fchans)
+            f_start = frame.get_frequency(f_index)
+            drift_rate = 0 * u.Hz / u.s
+            path = stg.constant_path(f_start=f_start, drift_rate=drift_rate)
+            amp = rfi_params.get('NegBand_amp', 0.5)
+            level = -amp * noise_x_std
+            t_profile = stg.constant_t_profile(level=level)
+            width_hz = rfi_params.get('NegBand_width', 0.5e6)
+            width = min(width_hz, fchans * df.to(u.Hz).value / 2) * u.Hz  # 限制不超过总带宽的一半
+            f_profile = stg.gaussian_f_profile(width=width)
+            bp_profile = stg.constant_bp_profile(1.0)
+            added_signal = frame.add_signal(path, t_profile, f_profile, bp_profile)
+
     signal_spec = frame.get_data(db=False)
 
-    # 注入 RFI
+    # 注入传统 RFI
     if rfi_params:
-        noisy_spec, rfi_mask = add_rfi(signal_spec, rfi_params, noise_std=noise_x_std)
+        noisy_spec, traditional_rfi_mask = add_rfi(signal_spec, rfi_params)
+        rfi_mask |= traditional_rfi_mask
     else:
         noisy_spec = signal_spec.copy()
         rfi_mask = np.zeros_like(signal_spec, dtype=bool)
@@ -256,7 +296,6 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
             plt.savefig(out_path, dpi=480)
             print(f"Plot saved to {out_path}")
     return signal_spec, clean_spec, noisy_spec, rfi_mask
-
 
 if __name__ == "__main__":
     import os
@@ -303,7 +342,13 @@ if __name__ == "__main__":
         'NBT': np.random.randint(10, 30),  # 窄带瞬态RFI
         'NBT_amp': np.random.uniform(1, 5),
         'BBT': np.random.randint(5, 15),  # 宽带瞬态RFI
-        'BBT_amp': np.random.uniform(1, 5)
+        'BBT_amp': np.random.uniform(1, 5),
+        'LowDrift': np.random.randint(1, 6),
+        'LowDrift_amp': np.random.uniform(1.25, 5),
+        'LowDrift_width': np.random.uniform(7.5, 15),
+        'NegBand': np.random.randint(1, 2),
+        'NegBand_amp': np.random.uniform(0.25, 0.75),
+        'NegBand_width': np.random.uniform(0.3e6, 0.7e6)
     }
 
     sim_dynamic_spec_seti(
