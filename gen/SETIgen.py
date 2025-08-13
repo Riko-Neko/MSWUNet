@@ -13,6 +13,7 @@ except:
 import matplotlib.pyplot as plt
 from gen.FRIgen import add_rfi
 
+
 def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
                           signals=None,
                           noise_x_mean=0.0, noise_x_std=1.0, noise_type='normal',
@@ -254,12 +255,11 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
     signal_spec = frame.get_data(db=False)
 
     # 注入传统 RFI
-    if rfi_params:
+    if rfi_params and np.random.random() < 0.5:
         noisy_spec, traditional_rfi_mask = add_rfi(signal_spec, rfi_params)
         rfi_mask |= traditional_rfi_mask
     else:
         noisy_spec = signal_spec.copy()
-        rfi_mask = np.zeros_like(signal_spec, dtype=bool)
 
     # 可视化（可选）
     if plot:
@@ -296,6 +296,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
             plt.savefig(out_path, dpi=480)
             print(f"Plot saved to {out_path}")
     return signal_spec, clean_spec, noisy_spec, rfi_mask
+
 
 if __name__ == "__main__":
     import os

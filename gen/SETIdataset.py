@@ -71,7 +71,7 @@ class DynamicSpectrumDataset(Dataset):
         for i in range(n_signals):
             # 随机路径类型
             path_type = random.choices(['constant', 'sine', 'squared', 'rfi'],
-                                       weights=[0.35, 0.2, 0.35, 0.1])[0]
+                                       weights=[0.4, 0.2, 0.4, 0.])[0]
             # 默认信号参数
             margin = int(0.2 * self.fchans)
             # 随机漂移率，确保绝对值不低于 drift_min_abs
@@ -129,17 +129,17 @@ class DynamicSpectrumDataset(Dataset):
 
         # 随机 RFI 配置
         rfi_params = {
-            'NBC': np.random.randint(max(1, self.fchans // 128), self.fchans // 64),
-            'NBC_amp': np.random.uniform(1.25, 5),
-            'NBT': np.random.randint(max(1, self.tchans // 128), self.tchans // 64),
-            'NBT_amp': np.random.uniform(2.5, 5),
-            'BBT': np.random.randint(max(1, self.fchans // 512), self.fchans // 256),
-            'BBT_amp': np.random.uniform(1.25, 5),
-            'LowDrift': np.random.randint(1, 6),
-            'LowDrift_amp': np.random.uniform(1.25, 5),
+            'NBC': np.random.randint(1, self.fchans // 128),
+            'NBC_amp': np.random.uniform(1, 25),
+            'NBT': np.random.randint(1, self.tchans // 16),
+            'NBT_amp': np.random.uniform(1, 50),
+            'BBT': np.random.randint(0, self.fchans // 512),
+            'BBT_amp': np.random.uniform(1, 25),
+            'LowDrift': np.random.randint(1, 5),
+            'LowDrift_amp': np.random.uniform(1, 25),
             'LowDrift_width': np.random.uniform(7.5, 15),
-            'NegBand': np.random.randint(1, 2),
-            'NegBand_amp': np.random.uniform(0.25, 0.75),
+            'NegBand': np.random.randint(0, 2),
+            'NegBand_amp': np.random.uniform(0.5, 5),
             'NegBand_width': np.random.uniform(0.3e6, 0.7e6)
         }
 
