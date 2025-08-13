@@ -15,7 +15,8 @@ class DynamicSpectrumDataset(Dataset):
                  snr_min=10.0, snr_max=30.0,
                  width_min=1.0, width_max=5.0,
                  num_signals=(0, 1),
-                 noise_std_min=0.05, noise_std_max=0.2):
+                 noise_std_min=0.05, noise_std_max=0.2,
+                 background_fil=None):
         """
         动态生成式数据集构造函数，参数动态适应频率和时间通道数。
 
@@ -27,6 +28,7 @@ class DynamicSpectrumDataset(Dataset):
             width_min, width_max: 频谱宽度范围 (Hz)
             num_signals: 信号个数范围 (min, max)
             noise_std_min, noise_std_max: 噪声标准差范围
+            background_fil: fil文件路径，用于背景噪声
         """
         self.tchans = tchans
         self.fchans = fchans
@@ -44,6 +46,7 @@ class DynamicSpectrumDataset(Dataset):
         self.num_signals = num_signals
         self.noise_std_min = noise_std_min
         self.noise_std_max = noise_std_max
+        self.background_fil = background_fil
 
         # 动态计算总带宽和总时间
         self.total_bandwidth = self.fchans * self.df
@@ -71,7 +74,7 @@ class DynamicSpectrumDataset(Dataset):
         for i in range(n_signals):
             # 随机路径类型
             path_type = random.choices(['constant', 'sine', 'squared', 'rfi'],
-                                       weights=[0.4, 0.2, 0.4, 0.])[0]
+                                       weights=[0.5, 0., 0.5, 0.])[0]
             # 默认信号参数
             margin = int(0.2 * self.fchans)
             # 随机漂移率，确保绝对值不低于 drift_min_abs
@@ -139,8 +142,8 @@ class DynamicSpectrumDataset(Dataset):
             'LowDrift_amp': np.random.uniform(1, 25),
             'LowDrift_width': np.random.uniform(7.5, 15),
             'NegBand': np.random.randint(0, 2),
-            'NegBand_amp': np.random.uniform(0.5, 5),
-            'NegBand_width': np.random.uniform(0.3e6, 0.7e6)
+            'NegBand_amp': np.random.uniform(1, 10),
+            'NegBand_width': np.random.uniform(0.3e3, 0.7e3)
         }
 
         # 生成动态频谱样本
@@ -152,12 +155,13 @@ class DynamicSpectrumDataset(Dataset):
             fch1=self.fch1,
             ascending=self.ascending,
             signals=signals,
-            noise_x_mean=0.0,
+            noise_x_mean=0.,
             noise_x_std=noise_std,
             noise_type='normal',
             rfi_params=rfi_params,
             seed=None,
-            plot=False
+            plot=False,
+            background_fil=self.background_fil
         )
 
         # 归一化处理
@@ -238,7 +242,8 @@ if __name__ == "__main__":
     dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
                                      drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.2,
                                      snr_min=10.0, snr_max=20.0, width_min=10, width_max=15, num_signals=(1, 1),
-                                     noise_std_min=0.025, noise_std_max=0.05)
+                                     noise_std_min=0.025, noise_std_max=0.05,
+                                     background_fil="../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil")
 
     """
     参数生成 Refs:
@@ -253,6 +258,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    plot_samples(dataset, kind='clean', num=30)
+    # plot_samples(dataset, kind='clean', num=30)
     plot_samples(dataset, kind='noisy', num=30)
-    plot_samples(dataset, kind='mask', num=30)
+    # plot_samples(dataset, kind='mask', num=30)

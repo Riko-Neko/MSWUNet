@@ -71,6 +71,13 @@ class SETIWaterFullDataset(Dataset):
         # Load data
         patch_freqs, data = self.obs.grab_data(f_start, f_stop, start_t, end_t)
 
+        # Normalize
+        mean = np.mean(data)
+        std = np.std(data)
+        if std < 1e-10:
+            std = 1.0
+        data = (data - mean) / std
+
         # To tensor
         patch_tensor = torch.from_numpy(data).float().unsqueeze(0)  # (1, patch_t, patch_f)
 

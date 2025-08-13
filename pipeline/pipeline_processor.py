@@ -160,3 +160,14 @@ class SETIPipelineProcessor:
         for handler in self.logger.handlers:
             if isinstance(handler, logging.FileHandler):
                 handler.flush()
+
+    def reset(self):
+        """Reset the stored status, confidence, and ranges"""
+        self.cell_status = [[None for _ in range(self.grid_width)]
+                            for _ in range(self.grid_height)]
+        self.confidence_scores = [[0.0 for _ in range(self.grid_width)]
+                                  for _ in range(self.grid_height)]
+        self.freq_ranges = [[(0.0, 0.0) for _ in range(self.grid_width)]
+                            for _ in range(self.grid_height)]
+        self.time_ranges = [[(0.0, 0.0) for _ in range(self.grid_width)]
+                            for _ in range(self.grid_height)]

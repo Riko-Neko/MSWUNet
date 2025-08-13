@@ -199,10 +199,13 @@ class SETIWaterfallRenderer(QWidget):
         """Reset the grid to its initial state"""
         self.current_col = 0
         self.current_row = 0
-        self.cell_status = [[None for _ in range(self.grid_width)]
-                            for _ in range(self.grid_height)]
-        self.confidence_scores = [[0.0 for _ in range(self.grid_width)]
-                                  for _ in range(self.grid_height)]
+        self.processor.reset()
+
+        self.cell_status = self.processor.cell_status
+        self.confidence_scores = self.processor.confidence_scores
+        self.freq_ranges = self.processor.freq_ranges
+        self.time_ranges = self.processor.time_ranges
+
         self.image_label.hide()
         self.grid_content.update()
         self.timer.start(50)
@@ -244,10 +247,9 @@ class SETIWaterfallRenderer(QWidget):
         processed = 0
         detections = 0
 
-        # Count processed cells and detections
         for row in range(self.grid_height):
             for col in range(self.grid_width):
-                if self.cell_status[row][col] is not None:
+                if self.confidence_scores[row][col] > 0:
                     processed += 1
                     if self.cell_status[row][col] is True:
                         detections += 1
@@ -257,60 +259,72 @@ class SETIWaterfallRenderer(QWidget):
 
     def show_cell_detail(self, row, col):
         """
-        Display detailed information for a cell, including denoised spectrum
+        Display detailed information for a cell, including:
+        - Original spectrum
+        - Denoised spectrum
+        - Additional hits info (text)
 
         Args:
             row (int): Row index
             col (int): Column index
         """
-        # Get data for this cell
         patch_data, freq_range, time_range_idx = self.dataset.get_patch(row, col)
         freq_min, freq_max = freq_range
         time_start, time_end = (time_range_idx[0] * self.tsamp, time_range_idx[1] * self.tsamp)
 
-        # Move data to device
         patch_data = patch_data.to(self.device).unsqueeze(0)  # (1, 1, t, f)
-
-        # Run model inference again to get denoised output
         with torch.no_grad():
             denoised, mask, logits = self.model(patch_data)
             denoised_np = denoised.squeeze().cpu().numpy()
+        patch_np = patch_data.squeeze().cpu().numpy()
 
-        # Create figure with subplots (denoised on top, hits info below)
-        fig, axs = plt.subplots(2, 1, figsize=(6, 5.5), gridspec_kw={'height_ratios': [4, 1]})
-        fig.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=0.95, hspace=0.1)  # Minimize margins
+        # High DPI figure for sharper text
+        fig, axs = plt.subplots(3, 1, figsize=(6, 8), dpi=200,
+                                gridspec_kw={'height_ratios': [4, 4, 1]})
+        fig.subplots_adjust(left=0.08, right=0.95, bottom=0.05, top=0.95, hspace=0.25)
 
-        # Plot denoised spectrum
-        im = axs[0].imshow(denoised_np, aspect='auto', origin='lower',
-                           extent=[time_start, time_end, freq_min, freq_max],
-                           cmap='viridis')
-        axs[0].set_xlabel("Time (seconds)")
-        axs[0].set_ylabel("Frequency (MHz)")
-        axs[0].set_title(f"Denoised Spectrum\nCell ({col}, {row})")
+        # Common plot params
+        label_font = 12
+        title_font = 13
 
-        # Add colorbar
-        cbar = fig.colorbar(im, ax=axs[0], fraction=0.046, pad=0.04)
-        cbar.set_label("Intensity")
+        # Original spectrum
+        im0 = axs[0].imshow(patch_np, aspect='auto', origin='lower',
+                            extent=[time_start, time_end, freq_min, freq_max],
+                            cmap='viridis')
+        axs[0].set_xlabel("Time (seconds)", fontsize=label_font)
+        axs[0].set_ylabel("Frequency (MHz)", fontsize=label_font)
+        axs[0].set_title(f"Original Spectrum\nCell ({col}, {row})", fontsize=title_font)
+        cbar0 = fig.colorbar(im0, ax=axs[0], fraction=0.046, pad=0.04)
+        cbar0.set_label("Intensity", fontsize=label_font)
 
-        # Load and display additional info (hits)
+        # Denoised spectrum
+        im1 = axs[1].imshow(denoised_np, aspect='auto', origin='lower',
+                            extent=[time_start, time_end, freq_min, freq_max],
+                            cmap='viridis')
+        axs[1].set_xlabel("Time (seconds)", fontsize=label_font)
+        axs[1].set_ylabel("Frequency (MHz)", fontsize=label_font)
+        axs[1].set_title(f"Denoised Spectrum\nCell ({col}, {row})", fontsize=title_font)
+        cbar1 = fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
+        cbar1.set_label("Intensity", fontsize=label_font)
+
+        # Hits info (bigger font for clarity)
         hits_text = self.load_additional_info(row, col, denoised_np)
-        axs[1].axis('off')
-        axs[1].text(0.01, 0.95, hits_text, va='top', ha='left', wrap=True, fontsize=8)
+        axs[2].axis('off')
+        axs[2].text(0.01, 0.95, hits_text, va='top', ha='left', wrap=True, fontsize=11)
 
-        # Convert matplotlib figure to QPixmap
+        # Convert high-res matplotlib figure to QPixmap
         fig.canvas.draw()
         width, height = fig.canvas.get_width_height()
         img = QImage(fig.canvas.buffer_rgba(), width, height, QImage.Format_ARGB32)
-        pixmap = QPixmap.fromImage(img).scaled(270, 250, Qt.KeepAspectRatio)  # Scale pixmap to fit
 
-        # Set pixmap to label
+        # Downscale to QLabel size → keeps sharpness
+        pixmap = QPixmap.fromImage(img).scaled(
+            270, 350, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+
         self.image_label.setPixmap(pixmap)
-        self.image_label.setFixedSize(270, 250)  # Set fixed size for image label
+        self.image_label.setFixedSize(270, 350)
 
-        # Set pixmap to label
-        self.image_label.setPixmap(pixmap)
-
-        # Clean up
         plt.close(fig)
 
     def load_additional_info(self, row, col, denoised_np):
@@ -354,6 +368,13 @@ class GridContent(QWidget):
         """
         painter = QPainter(self)
 
+        UNPROCESSED = QColor(30, 30, 30)
+        DETECTED_HIGH_CONF = QColor(0, 200, 0)
+        DETECTED_LOW_CONF = QColor(200, 200, 0)
+        NO_SIGNAL_HIGH_CONF = QColor(200, 0, 0)
+        NO_SIGNAL_LOW_CONF = QColor(200, 200, 0)
+        UNCERTAIN = QColor(200, 200, 0)
+
         if self.renderer.folding_type == 'vertical':
             for fold_i in range(self.renderer.num_folds):
                 visual_col = fold_i % self.renderer.folds_per_line
@@ -371,22 +392,18 @@ class GridContent(QWidget):
                         rect_x = subgrid_x + c * self.renderer.cell_size
                         rect_y = subgrid_y + visual_r * self.renderer.cell_size
 
-                        # Determine cell color based on status and confidence
                         status = self.renderer.cell_status[r][c]
                         confidence = self.renderer.confidence_scores[r][c]
 
-                        if status is None:  # Not processed or uncertain
-                            color = QColor(30, 30, 30)  # Dark gray
-                        elif status is True:  # Signal detected
-                            if confidence > 0.8:
-                                color = QColor(0, 200, 0)  # Green (high confidence)
+                        if status is None:
+                            if confidence > 0:
+                                color = UNCERTAIN
                             else:
-                                color = QColor(200, 200, 0)  # Yellow (medium confidence)
-                        else:  # No signal
-                            if confidence < 0.2:
-                                color = QColor(200, 0, 0)  # Red (high confidence)
-                            else:
-                                color = QColor(200, 200, 0)  # Yellow (medium confidence)
+                                color = UNPROCESSED
+                        elif status:
+                            color = DETECTED_HIGH_CONF if confidence > 0.8 else UNCERTAIN
+                        else:
+                            color = NO_SIGNAL_HIGH_CONF if confidence < 0.2 else UNCERTAIN
 
                         # Fill cell with appropriate color
                         painter.fillRect(rect_x, rect_y, self.renderer.cell_size, self.renderer.cell_size, color)
@@ -394,6 +411,7 @@ class GridContent(QWidget):
                         # Draw cell border
                         painter.setPen(QColor(60, 60, 60))
                         painter.drawRect(rect_x, rect_y, self.renderer.cell_size, self.renderer.cell_size)
+
         elif self.renderer.folding_type == 'horizontal':
             for fold_i in range(self.renderer.num_folds):
                 visual_col = fold_i % self.renderer.folds_per_line
@@ -411,25 +429,21 @@ class GridContent(QWidget):
                         rect_x = subgrid_x + visual_c * self.renderer.cell_size
                         rect_y = subgrid_y + r * self.renderer.cell_size
 
-                        # Determine cell color based on status and confidence
                         status = self.renderer.cell_status[r][c]
                         confidence = self.renderer.confidence_scores[r][c]
 
-                        if status is None:  # Not processed or uncertain
-                            color = QColor(30, 30, 30)  # Dark gray
-                        elif status is True:  # Signal detected
-                            if confidence > 0.8:
-                                color = QColor(0, 200, 0)  # Green (high confidence)
+                        if status is None:
+                            if confidence > 0:
+                                color = UNCERTAIN
                             else:
-                                color = QColor(200, 200, 0)  # Yellow (medium confidence)
-                        else:  # No signal
-                            if confidence < 0.2:
-                                color = QColor(200, 0, 0)  # Red (high confidence)
-                            else:
-                                color = QColor(200, 200, 0)  # Yellow (medium confidence)
+                                color = UNPROCESSED
+                        elif status:
+                            color = DETECTED_HIGH_CONF if confidence > 0.8 else UNCERTAIN
+                        else:
+                            color = NO_SIGNAL_HIGH_CONF if confidence < 0.2 else UNCERTAIN
 
-                        # Fill cell with appropriate color
-                        painter.fillRect(rect_x, rect_y, self.renderer.cell_size, self.renderer.cell_size, color)
+                        painter.fillRect(rect_x, rect_y, self.renderer.cell_size, self.renderer.cell_size,
+                                         color)
 
                         # Draw cell border
                         painter.setPen(QColor(60, 60, 60))
@@ -469,20 +483,9 @@ class GridContent(QWidget):
         """
         pos = event.pos()
         fold_i, r, c = self.map_to_grid(pos.x(), pos.y())
-        if fold_i is not None and self.renderer.cell_status[r][c] is not None:
+        if fold_i is not None and self.renderer.confidence_scores[r][c] > 0:
             self.renderer.last_click_pos = (r, c)
             self.renderer.show_cell_detail(r, c)
-
-            # Position image relative to click, but clamped within window
-            img_size = self.renderer.image_label.size()
-            viewport_pos = self.renderer.scroll_area.mapFromGlobal(event.globalPos())
-            img_x = max(0, min(viewport_pos.x() - img_size.width() // 2,
-                               self.renderer.scroll_area.width() - img_size.width()))
-            img_y = max(0, min(viewport_pos.y() - img_size.height() // 2,
-                               self.renderer.scroll_area.height() - img_size.height()))
-
-            self.renderer.image_label.move(img_x, img_y)
-            self.renderer.image_label.raise_()
             self.renderer.image_label.show()
         else:
             self.renderer.image_label.hide()

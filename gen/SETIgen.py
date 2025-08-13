@@ -14,12 +14,9 @@ import matplotlib.pyplot as plt
 from gen.FRIgen import add_rfi
 
 
-def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
-                          signals=None,
-                          noise_x_mean=0.0, noise_x_std=1.0, noise_type='normal',
-                          rfi_params=None,
-                          seed=None,
-                          plot=False, plot_filename=None):
+def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, signals=None, noise_x_mean=0.0,
+                          noise_x_std=1.0, noise_type='normal', rfi_params=None, seed=None, plot=False,
+                          plot_filename=None, background_fil=None):
     """
         使用 SetiGen 库合成动态频谱并注入射频干扰（RFI）。
 
@@ -129,15 +126,25 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
     elif not isinstance(fch1, u.Quantity):
         fch1 = fch1 * u.Hz
 
-    # 创建 Frame
-    frame = stg.Frame(fchans=fchans, tchans=tchans, df=df, dt=dt, fch1=fch1, ascending=ascending)
-    clean_spec = np.zeros_like(frame.data)
+    use_fil = False
+    if background_fil and np.random.random() < 0.0:
+        waterfall_itr = stg.split_waterfall_generator(background_fil, fchans, tchans=tchans, f_shift=None)
+        waterfall = next(waterfall_itr)
+        # 创建 Frame (使用背景噪声)
+        frame = stg.Frame(waterfall)
+        clean_spec = np.zeros_like(frame.data)
+        use_fil = True
 
-    # 添加背景噪声
-    if noise_type in ['normal', 'gaussian']:
-        frame.add_noise(x_mean=noise_x_mean, x_std=noise_x_std, noise_type='normal')
-    else:
-        frame.add_noise(x_mean=noise_x_mean, noise_type='chi2')
+    if not use_fil:
+        # 创建 Frame
+        frame = stg.Frame(fchans=fchans, tchans=tchans, df=df, dt=dt, fch1=fch1, ascending=ascending)
+        clean_spec = np.zeros_like(frame.data)
+
+        # 添加背景噪声
+        if noise_type in ['normal', 'gaussian']:
+            frame.add_noise(x_mean=noise_x_mean, x_std=noise_x_std, noise_type='normal')
+        else:
+            frame.add_noise(x_mean=noise_x_mean, noise_type='chi2')
 
     # 注入信号
     if signals:
@@ -237,16 +244,16 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False,
             added_signal = frame.add_signal(path, t_profile, f_profile, bp_profile)
             rfi_mask |= (added_signal > 0.1 * level)
 
-        # 添加负噪声带（负高斯轮廓），但不更新 RFI 掩码
+        # 添加负噪声带（负高斯轮廓）
         for _ in range(rfi_params.get('NegBand', 0)):
             f_index = np.random.randint(0, fchans)
             f_start = frame.get_frequency(f_index)
             drift_rate = 0 * u.Hz / u.s
             path = stg.constant_path(f_start=f_start, drift_rate=drift_rate)
-            amp = rfi_params.get('NegBand_amp', 0.5)
+            amp = rfi_params.get('NegBand_amp', 1)
             level = -amp * noise_x_std
             t_profile = stg.constant_t_profile(level=level)
-            width_hz = rfi_params.get('NegBand_width', 0.5e6)
+            width_hz = rfi_params.get('NegBand_width', 0.5e3)
             width = min(width_hz, fchans * df.to(u.Hz).value / 2) * u.Hz  # 限制不超过总带宽的一半
             f_profile = stg.gaussian_f_profile(width=width)
             bp_profile = stg.constant_bp_profile(1.0)

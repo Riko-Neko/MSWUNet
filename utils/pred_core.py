@@ -27,9 +27,13 @@ def _process_batch_core(model, batch, device):
     """
     # Handle different input formats (single tensor or tuple/list)
     if isinstance(batch, (list, tuple)):
-        inputs = batch[0].to(device)  # Noisy input
-        clean = batch[1].to(device) if len(batch) > 1 else None
-        rfi_mask = batch[2].to(device) if len(batch) > 2 else None
+        inputs = batch[0].to(device)
+        clean = None
+        rfi_mask = None
+        if len(batch) > 1 and isinstance(batch[1], torch.Tensor):
+            clean = batch[1].to(device)
+        if len(batch) > 2 and isinstance(batch[2], torch.Tensor):
+            rfi_mask = batch[2].to(device)
     else:
         inputs = batch.to(device)
         clean = None

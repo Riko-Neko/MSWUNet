@@ -72,7 +72,6 @@ def main():
                                            drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.2,
                                            snr_min=20.0, snr_max=30.0, width_min=10, width_max=30, num_signals=(0, 1),
                                            noise_std_min=0.025, noise_std_max=0.05)
-
     # Create data loaders
     train_dataloader = DataLoader(
         train_dataset,

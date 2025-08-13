@@ -16,7 +16,7 @@ from pipeline.renderer import SETIWaterfallRenderer
 from utils.pred_core import pred
 
 
-def main(mode=None, ui=False, *args):
+def main(mode=None, ui=False, obs=False, *args):
     # Set random seeds
     torch.manual_seed(42)
     np.random.seed(42)
@@ -31,21 +31,36 @@ def main(mode=None, ui=False, *args):
 
     print(f"\n[\033[32mInfo\033[0m] Using device: {device}")
 
-    # Create datasets
-    tchans = 144
-    fchans = 1024
-    df = 7.5
-    dt = 1.0
-    drift_min = -4.0
-    drift_max = 4.0
-    drift_min_abs = df // (tchans * dt)
-    pred_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
-                                          drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.2,
-                                          snr_min=10.0, snr_max=20.0, width_min=10, width_max=15, num_signals=(0, 1),
-                                          noise_std_min=0.025, noise_std_max=0.05)
+    # Common file path for observation data
+    obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
 
-    # Create data loaders
-    pred_dataloader = DataLoader(pred_dataset, batch_size=1, num_workers=1, pin_memory=True)
+    # Create datasets based on mode and obs flag
+    if obs and mode != "pipeline":
+        # Use pipeline dataset for obs mode
+        print("[\033[32mInfo\033[0m] Using observation data from:", obs_file_path)
+        dataset = SETIWaterFullDataset(
+            file_path=obs_file_path,
+            patch_t=144,
+            patch_f=1024,
+            overlap_pct=0.02
+        )
+        pred_dataloader = DataLoader(dataset, batch_size=1, num_workers=0, pin_memory=True)
+    else:
+        # Default simulated dataset
+        tchans = 144
+        fchans = 1024
+        df = 7.5
+        dt = 1.0
+        drift_min = -4.0
+        drift_max = 4.0
+        drift_min_abs = df // (tchans * dt)
+        pred_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
+                                              drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.3,
+                                              snr_min=20.0, snr_max=30.0, width_min=10, width_max=30,
+                                              num_signals=(0, 1),
+                                              noise_std_min=0.025, noise_std_max=0.05,
+                                              background_fil=obs_file_path)
+        pred_dataloader = DataLoader(pred_dataset, batch_size=1, num_workers=1, pin_memory=True)
 
     def load_model(model_class, checkpoint_path, **kwargs):
         model = model_class(**kwargs).to(device)
@@ -78,10 +93,9 @@ def main(mode=None, ui=False, *args):
 
     elif mode == "pipeline":
         print("[\033[32mInfo\033[0m] Running pipeline processing mode")
-        file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
-        # Create dataset
+        # Create dataset (always uses observation data)
         dataset = SETIWaterFullDataset(
-            file_path=file_path,
+            file_path=obs_file_path,
             patch_t=144,
             patch_f=1024,
             overlap_pct=0.02
@@ -99,7 +113,6 @@ def main(mode=None, ui=False, *args):
             print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
             processor = SETIPipelineProcessor(dataset, model, device)
             processor.process_all_patches()
-
 
     else:
         print("[\033[32mInfo\033[0m] Running single-model mode")
@@ -123,7 +136,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["dbl", "pipeline"],  # restrict allowed values
+        choices=["dbl", "pipeline"],
         help="Run mode: no argument for single-model pred, 'dbl' for dual-model comparison, 'pipeline' for pipeline processing"
     )
     parser.add_argument(
@@ -132,11 +145,17 @@ if __name__ == "__main__":
         default=False,
         help="Run pipeline in UI mode"
     )
+    parser.add_argument(
+        "--obs",
+        action="store_true",
+        default=False,
+        help="Use observation data file for default and dbl modes"
+    )
     args = parser.parse_args()
 
     if args.mode is None:
-        main(None, args.ui, True, False)
+        main(None, args.ui, args.obs, True, False)
     elif args.mode == "dbl":
-        main("dbl", args.ui)
+        main("dbl", args.ui, args.obs)
     elif args.mode == "pipeline":
-        main("pipeline", args.ui)
+        main("pipeline", args.ui, args.obs)
