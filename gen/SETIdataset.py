@@ -258,6 +258,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    # plot_samples(dataset, kind='clean', num=30)
+    plot_samples(dataset, kind='clean', num=30)
     plot_samples(dataset, kind='noisy', num=30)
-    # plot_samples(dataset, kind='mask', num=30)
+    plot_samples(dataset, kind='mask', num=30)

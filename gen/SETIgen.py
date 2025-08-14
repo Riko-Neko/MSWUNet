@@ -127,12 +127,13 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
         fch1 = fch1 * u.Hz
 
     use_fil = False
-    if background_fil and np.random.random() < 0.0:
+    if background_fil and np.random.random() < 0.5:
         waterfall_itr = stg.split_waterfall_generator(background_fil, fchans, tchans=tchans, f_shift=None)
         waterfall = next(waterfall_itr)
         # 创建 Frame (使用背景噪声)
         frame = stg.Frame(waterfall)
         clean_spec = np.zeros_like(frame.data)
+        signals = []
         use_fil = True
 
     if not use_fil:
@@ -230,7 +231,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
     rfi_mask = np.zeros_like(frame.data, dtype=bool)
 
     # 添加低漂移率 RFI（使用 setigen，constant 类型）
-    if rfi_params:
+    if rfi_params and not use_fil:
         for _ in range(rfi_params.get('LowDrift', 0)):
             f_index = np.random.randint(0, fchans)
             f_start = frame.get_frequency(f_index)
@@ -262,7 +263,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
     signal_spec = frame.get_data(db=False)
 
     # 注入传统 RFI
-    if rfi_params and np.random.random() < 0.5:
+    if rfi_params and np.random.random() < 0.5 and not use_fil:
         noisy_spec, traditional_rfi_mask = add_rfi(signal_spec, rfi_params)
         rfi_mask |= traditional_rfi_mask
     else:
