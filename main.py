@@ -43,8 +43,11 @@ def main():
     parser = argparse.ArgumentParser(description="Select CUDA device")
     parser.add_argument('-d', '--device', type=int, default=0,
                         help='CUDA device ID, default is 0')
+    parser.add_argument('-l', '--load', action='store_true',
+                        help='Load best weights instead of checkpoint weights')
     args = parser.parse_args()
     cuda_id = args.device
+    load_best = args.load
 
     # Set device
     if torch.backends.mps.is_available() and torch.backends.mps.is_built():
@@ -139,6 +142,7 @@ def main():
         valid_steps=valid_steps,
         checkpoint_dir=checkpoint_dir,
         resume_from=resume_from,
+        use_best_weights=load_best,
         force_save_best=True
     )
 
