@@ -9,15 +9,16 @@ from tqdm import tqdm
 
 
 # Training function with validation, best model saving, checkpoint loading, and force_save_best switch
-def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer, scheduler, device,
-                num_epochs=100, steps_per_epoch=1000, valid_interval=1, valid_steps=50,
-                checkpoint_dir='./checkpoints', log_interval=50, resume_from=None, force_save_best=False):
+def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer, scheduler, device, num_epochs=100,
+                steps_per_epoch=1000, valid_interval=1, valid_steps=50, checkpoint_dir='./checkpoints', log_interval=50,
+                resume_from=None, use_best_weights=False, force_save_best=False):
     # Create checkpoint directory
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     # Training log files
     step_log_file = Path(checkpoint_dir) / "training_log.csv"
     epoch_log_file = Path(checkpoint_dir) / "epoch_log.csv"
+    best_weights_file = Path(checkpoint_dir) / "best_model.pth"
 
     # Initialize logs
     if resume_from and os.path.exists(step_log_file):
@@ -26,7 +27,8 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
     else:
         # Otherwise, create new step log with header
         with open(step_log_file, 'w') as f:
-            f.write("epoch,global_step,total_loss,spectrum_loss,ssim_loss,rfi_loss,detection_loss,alpha,beta,gamma,delta\n")
+            f.write(
+                "epoch,global_step,total_loss,spectrum_loss,ssim_loss,rfi_loss,detection_loss,alpha,beta,gamma,delta\n")
 
     if resume_from and os.path.exists(epoch_log_file):
         # Load existing epoch log
@@ -49,7 +51,13 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
     if resume_from and os.path.exists(resume_from):
         print(f"[\033[32mInfo\033[0m] Resuming from checkpoint: {resume_from}")
         checkpoint = torch.load(resume_from, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        if use_best_weights:
+            best_weights = torch.load(best_weights_file, map_location=device)
+            model.load_state_dict(best_weights['model_state_dict'], strict=False)
+            print(f"[\033[32mInfo\033[0m] Loaded best weights from {best_weights_file}")
+        else:
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            print(f"[\033[32mInfo\033[0m] Loaded model state from {resume_from}")
         start_epoch = checkpoint['epoch'] + 1  # Start from the next epoch
         criterion.step = checkpoint['criterion_step']
         criterion.mse_moving_avg = checkpoint['mse_moving_avg']
@@ -161,18 +169,23 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
             # Save best model
             if valid_loss is not None and valid_loss < best_valid_loss:
-                best_valid_loss = valid_loss
-                best_epoch = epoch + 1
-                best_model_path = Path(checkpoint_dir) / "best_model.pth"
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': valid_loss,
-                    'criterion_step': criterion.step,
-                    'mse_moving_avg': criterion.mse_moving_avg,
-                }, best_model_path)
-                print(f"Saved best model (epoch {best_epoch}) with validation loss: {best_valid_loss:.6f}")
+                if valid_loss > 0.:
+                    best_valid_loss = valid_loss
+                    best_epoch = epoch + 1
+                    best_model_path = Path(checkpoint_dir) / "best_model.pth"
+                    torch.save({
+                        'epoch': epoch,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'loss': valid_loss,
+                        'criterion_step': criterion.step,
+                        'mse_moving_avg': criterion.mse_moving_avg,
+                    }, best_model_path)
+                    print(
+                        f"\033[32mSaved best model (epoch {best_epoch}) with validation loss: {best_valid_loss:.6f}\033[0m")
+                else:
+                    print(
+                        f"\033[31mOpps! invalid loss(<0), check if there is gradient explosion.\033[0m")
 
         # Log epoch data
         epoch_time = time.time() - epoch_start

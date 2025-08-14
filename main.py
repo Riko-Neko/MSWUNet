@@ -54,22 +54,22 @@ def main():
     else:
         device = torch.device("cpu")
 
-    print(f"Using device: {device}")
+    print(f"[\033[32mInfo\033[0m] Using device: {device}")
 
     # Create datasets
     tchans = 144
     fchans = 1024
     df = 7.5
     dt = 1.0
-    drift_min = -4.0
-    drift_max = 4.0
+    drift_min = -5.0
+    drift_max = 5.0
     drift_min_abs = df // (tchans * dt)
     train_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
-                                           drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.2,
+                                           drift_min=drift_min, drift_max=drift_max, drift_min_abs=1,
                                            snr_min=20.0, snr_max=30.0, width_min=10, width_max=30, num_signals=(0, 1),
                                            noise_std_min=0.025, noise_std_max=0.05)
     valid_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
-                                           drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.2,
+                                           drift_min=drift_min, drift_max=drift_max, drift_min_abs=1,
                                            snr_min=20.0, snr_max=30.0, width_min=10, width_max=30, num_signals=(0, 1),
                                            noise_std_min=0.025, noise_std_max=0.05)
     # Create data loaders
@@ -98,7 +98,7 @@ def main():
     valid_steps = 30
 
     # Loss function and optimizer
-    criterion = CombinedLoss(device, alpha=0.5, beta=0.5, gamma=0., delta=0.1, momentum=0.99, fixed_g_d=True)
+    criterion = CombinedLoss(device, alpha=0.8, beta=0.2, gamma=0.1, delta=0.1, momentum=0.99, fixed_g_d=True)
     optimizer = optim.Adam(list(model.parameters()) + list(criterion.parameters()), lr=5e-4, weight_decay=1e-7)
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     #     optimizer,
