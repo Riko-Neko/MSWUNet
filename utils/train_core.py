@@ -50,9 +50,9 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
     start_epoch = 0
     if resume_from and os.path.exists(resume_from):
         print(f"[\033[32mInfo\033[0m] Resuming from checkpoint: {resume_from}")
-        checkpoint = torch.load(resume_from, map_location=device)
+        checkpoint = torch.load(resume_from, weights_only=True, map_location=device)
         if use_best_weights:
-            best_weights = torch.load(best_weights_file, map_location=device)
+            best_weights = torch.load(best_weights_file, weights_only=True, map_location=device)
             model.load_state_dict(best_weights['model_state_dict'], strict=False)
             print(f"[\033[32mInfo\033[0m] Loaded best weights from {best_weights_file}")
         else:
