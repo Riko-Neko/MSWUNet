@@ -55,11 +55,10 @@ def main(mode=None, ui=False, obs=False, *args):
         drift_max = 4.0
         drift_min_abs = df // (tchans * dt)
         pred_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
-                                              drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.3,
+                                              drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.05,
                                               snr_min=20.0, snr_max=30.0, width_min=10, width_max=30,
-                                              num_signals=(0, 1),
-                                              noise_std_min=0.025, noise_std_max=0.05,
-                                              background_fil=obs_file_path)
+                                              num_signals=(0, 1), noise_std_min=0.025, noise_std_max=0.05,
+                                              use_fil=False, background_fil=obs_file_path)
         pred_dataloader = DataLoader(pred_dataset, batch_size=1, num_workers=1, pin_memory=True)
 
     def load_model(model_class, checkpoint_path, **kwargs):

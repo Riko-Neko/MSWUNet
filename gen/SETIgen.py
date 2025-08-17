@@ -127,7 +127,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
         fch1 = fch1 * u.Hz
 
     use_fil = False
-    if background_fil and np.random.random() < 0.5:
+    if background_fil and np.random.random() < 0.0:
         waterfall_itr = stg.split_waterfall_generator(background_fil, fchans, tchans=tchans, f_shift=None)
         waterfall = next(waterfall_itr)
         # 创建 Frame (使用背景噪声)

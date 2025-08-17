@@ -68,15 +68,15 @@ def main():
     drift_max = 5.0
     drift_min_abs = df // (tchans * dt)
     train_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
-                                           drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.8,
+                                           drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.5,
                                            snr_min=20.0, snr_max=30.0, width_min=10, width_max=30, num_signals=(0, 1),
-                                           noise_std_min=0.025, noise_std_max=0.05,
+                                           noise_std_min=0.025, noise_std_max=0.05, ues_fil=False,
                                            background_fil="../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil")
 
     valid_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
-                                           drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.8,
+                                           drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.5,
                                            snr_min=20.0, snr_max=30.0, width_min=10, width_max=30, num_signals=(0, 1),
-                                           noise_std_min=0.025, noise_std_max=0.05,
+                                           noise_std_min=0.025, noise_std_max=0.05, ues_fil=False,
                                            background_fil="../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil")
 
     # Create data loaders
@@ -105,7 +105,7 @@ def main():
     valid_steps = 30
 
     # Loss function and optimizer
-    criterion = CombinedLoss(device, alpha=0.8, beta=0.2, gamma=0.1, delta=0.1, momentum=0.99, fixed_g_d=True)
+    criterion = CombinedLoss(device, alpha=1.0, beta=0., gamma=0., delta=0., momentum=0.99, fixed_g_d=True)
     optimizer = optim.Adam(list(model.parameters()) + list(criterion.parameters()), lr=5e-4, weight_decay=1e-7)
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     #     optimizer,

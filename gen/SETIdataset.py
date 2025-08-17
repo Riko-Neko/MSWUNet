@@ -10,13 +10,9 @@ from gen.SETIgen import sim_dynamic_spec_seti
 
 class DynamicSpectrumDataset(Dataset):
     def __init__(self,
-                 tchans=224, fchans=224, df=1.0, dt=1.0, fch1=None, ascending=False,
-                 drift_min=-2.0, drift_max=2.0, drift_min_abs=0.2,
-                 snr_min=10.0, snr_max=30.0,
-                 width_min=1.0, width_max=5.0,
-                 num_signals=(0, 1),
-                 noise_std_min=0.05, noise_std_max=0.2,
-                 background_fil=None):
+                 tchans=224, fchans=224, df=1.0, dt=1.0, fch1=None, ascending=False, drift_min=-2.0, drift_max=2.0,
+                 drift_min_abs=0.2, snr_min=10.0, snr_max=30.0, width_min=1.0, width_max=5.0, num_signals=(0, 1),
+                 noise_std_min=0.05, noise_std_max=0.2, use_fil=False, background_fil=None):
         """
         动态生成式数据集构造函数，参数动态适应频率和时间通道数。
 
@@ -46,7 +42,7 @@ class DynamicSpectrumDataset(Dataset):
         self.num_signals = num_signals
         self.noise_std_min = noise_std_min
         self.noise_std_max = noise_std_max
-        self.background_fil = background_fil
+        self.background_fil = None if not use_fil else background_fil
 
         # 动态计算总带宽和总时间
         self.total_bandwidth = self.fchans * self.df
