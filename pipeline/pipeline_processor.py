@@ -8,7 +8,8 @@ from pipeline.metrics import execute_hits
 
 
 class SETIPipelineProcessor:
-    def __init__(self, dataset, model, device, log_dir=Path("./pipeline/log"), simple_output=False):
+    def __init__(self, dataset, model, device, log_dir=Path("./pipeline/log"), verbose=False, drift=[0.05, 4.0],
+                 snr_threshold=10.0):
         """
         Initialize the SETI pipeline processor with dataset and model
 
@@ -17,7 +18,7 @@ class SETIPipelineProcessor:
             model: Trained DWTNet model
             device: Computation device (e.g., 'cuda' or 'cpu')
             log_dir: Directory for log files
-            simple_output: Whether to use simple console output
+            verbose: Whether to use simple console output
         """
         self.dataset = dataset
         self.model = model
@@ -42,14 +43,18 @@ class SETIPipelineProcessor:
         self.time_ranges = [[(0.0, 0.0) for _ in range(self.grid_width)]
                             for _ in range(self.grid_height)]
 
+        self.drift = drift
+        self.snr_threshold = snr_threshold
+
         # Logging setup
         log_dir.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_dir / "seti_pipeline.log")
+        # Overwrite log file if it exists
+        file_handler = logging.FileHandler(log_dir / "seti_pipeline.log", mode='w')
         file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 
         handlers = [file_handler]
-        if not simple_output:
+        if verbose:
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.INFO)
             console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
@@ -57,8 +62,14 @@ class SETIPipelineProcessor:
 
         logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
         self.logger = logging.getLogger(__name__)
-        self.simple_output = simple_output
+        self.verbose = verbose
         self.hits_file = log_dir / "hits.dat"
+        # Remove existing hits file to override
+        if self.hits_file.exists():
+            try:
+                self.hits_file.unlink()
+            except Exception as e:
+                self.logger.error(f"Failed to remove existing hits file: {e}")
 
     def process_patch(self, row, col):
         """
@@ -100,9 +111,9 @@ class SETIPipelineProcessor:
                     patch=denoised_np,
                     tsamp=self.tsamp,
                     foff=self.foff,
-                    max_drift=4.0,
-                    min_drift=0.1,
-                    snr_threshold=10.0
+                    max_drift=self.drift[1],
+                    min_drift=self.drift[0],
+                    snr_threshold=self.snr_threshold
                 )
                 hits_info = df_hits.to_string(index=False) if not df_hits.empty else "No hits detected."
 
@@ -115,7 +126,7 @@ class SETIPipelineProcessor:
                     df_hits['time_start'] = time_range[0]
                     df_hits['time_end'] = time_range[1]
 
-                    # Append to .dat file
+                    # Append to .dat file (create with header if not exists)
                     header = not self.hits_file.exists()
                     df_hits.to_csv(self.hits_file, mode='a', sep='\t', header=header, index=False)
 
@@ -125,7 +136,7 @@ class SETIPipelineProcessor:
         self.freq_ranges[row][col] = freq_range
         self.time_ranges[row][col] = time_range
 
-        # Log to file (and console if not simple)
+        # Log to file (and console if not simple_output)
         status_str = "Signal detected" if status is True else "No signal" if status is False else "Uncertain"
         log_msg = f"Processed cell ({row}, {col}): {status_str} (Confidence: {confidence:.2f})\n"
         log_msg += f"Frequency: {freq_range[0]:.4f} - {freq_range[1]:.4f} MHz\n"
@@ -139,10 +150,19 @@ class SETIPipelineProcessor:
             if isinstance(handler, logging.FileHandler):
                 handler.flush()
 
-        # Simple console output if enabled
-        if self.simple_output and status is True and not df_hits.empty:
-            print(f"Hit found in cell ({row}, {col}) with max SNR: {df_hits['SNR'].max():.2f}")
-
+        # Simple console output if enabled (only for high-confidence signals with hits)
+        if not self.verbose and status is True:
+            print(
+                f"[\033[35mML\033[0m] Found candidate in cell ({row}, {col}), frequency: {freq_range[0]:.4f} - {freq_range[1]:.4f} MHz")
+            if not df_hits.empty:
+                for i in range(len(df_hits)):
+                    print(
+                        f"[\033[36mHit\033[0m] Found signal {i + 1}: "
+                        f"SNR=\033[32m{df_hits.at[i, 'SNR']:.2f}\033[0m, "
+                        f"DriftRate=\033[32m{df_hits.at[i, 'DriftRate']:.2f}\033[0m, "
+                        f"Freq=\033[35m{df_hits.at[i, 'Uncorrected_Frequency']:.2f} Hz\033[0m, "
+                        f"Range=[{df_hits.at[i, 'freq_start']:.2f}, {df_hits.at[i, 'freq_end']:.2f}]"
+                    )
         return {
             'status': status,
             'confidence': confidence,
@@ -153,6 +173,13 @@ class SETIPipelineProcessor:
 
     def process_all_patches(self):
         """Process all patches in the grid"""
+        # Remove existing hits file at start (to override from previous runs)
+        if self.hits_file.exists():
+            try:
+                self.hits_file.unlink()
+            except Exception as e:
+                self.logger.error(f"Failed to remove existing hits file: {e}")
+
         for row in range(self.grid_height):
             for col in range(self.grid_width):
                 self.process_patch(row, col)
@@ -160,6 +187,14 @@ class SETIPipelineProcessor:
         for handler in self.logger.handlers:
             if isinstance(handler, logging.FileHandler):
                 handler.flush()
+
+        # Generate hits CSV sorted by SNR (descending)
+        csv_file = self.hits_file.with_suffix('.csv')
+        if self.hits_file.exists():
+            df_all_hits = pd.read_csv(self.hits_file, sep='\t')
+            if 'SNR' in df_all_hits.columns:
+                df_sorted = df_all_hits.sort_values(by='SNR', ascending=False)
+                df_sorted.to_csv(csv_file, index=False)
 
     def reset(self):
         """Reset the stored status, confidence, and ranges"""

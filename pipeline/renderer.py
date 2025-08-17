@@ -15,7 +15,8 @@ from pipeline.pipeline_processor import SETIPipelineProcessor
 
 
 class SETIWaterfallRenderer(QWidget):
-    def __init__(self, dataset, model, device, log_dir=Path("./pipeline/log"), simple_output=False, parent=None):
+    def __init__(self, dataset, model, device, log_dir=Path("./pipeline/log"), verbose=False, parent=None,
+                 drift=[0.05, 4.0], snr_threshold=10.0):
         """
         Initialize the SETI waterfall renderer with dataset and model
 
@@ -24,10 +25,13 @@ class SETIWaterfallRenderer(QWidget):
             model: Trained DWTNet model
             device: Computation device (e.g., 'cuda' or 'cpu')
             log_dir: Directory for logs
-            simple_output: Whether to use simple console output
+            verbose: Whether to use simple console output
         """
         super().__init__(parent)
-        self.processor = SETIPipelineProcessor(dataset, model, device, log_dir=log_dir, simple_output=simple_output)
+        self.drift = drift
+        self.snr_threshold = snr_threshold
+
+        self.processor = SETIPipelineProcessor(dataset, model, device, log_dir=log_dir, verbose=verbose)
         self.dataset = self.processor.dataset
         self.model = self.processor.model
         self.device = self.processor.device
@@ -147,7 +151,7 @@ class SETIWaterfallRenderer(QWidget):
         info_layout.addLayout(stats_layout)
 
         # Confidence threshold slider info
-        self.confidence_label = QLabel("Confidence Threshold: 0.8")
+        self.confidence_label = QLabel("Detection Threshold: >0.8 or <0.2")
         info_layout.addWidget(self.confidence_label)
 
         # Control buttons
@@ -163,8 +167,19 @@ class SETIWaterfallRenderer(QWidget):
         info_layout.addLayout(btn_layout)
 
         # Image display section
-        info_layout.addWidget(QLabel("Cell Detail:"))
+        cell_detail_label = QLabel("Cell Detail:")
+        cell_detail_label.setStyleSheet("font-weight: bold;")
+        info_layout.addWidget(cell_detail_label)
         info_layout.addWidget(self.image_label)
+        info_layout.addStretch()
+
+        # Hits information display (below the image)
+        hits_title = QLabel("Hits Info:")
+        hits_title.setStyleSheet("font-weight: bold;")
+        info_layout.addWidget(hits_title)
+        self.hits_label = QLabel("")
+        self.hits_label.setWordWrap(True)
+        info_layout.addWidget(self.hits_label)
         info_layout.addStretch()
 
         main_layout.addWidget(self.info_panel)
@@ -262,15 +277,12 @@ class SETIWaterfallRenderer(QWidget):
         Display detailed information for a cell, including:
         - Original spectrum
         - Denoised spectrum
-        - Additional hits info (text)
-
-        Args:
-            row (int): Row index
-            col (int): Column index
+        - Additional hits info (text) shown in the sidebar
         """
         patch_data, freq_range, time_range_idx = self.dataset.get_patch(row, col)
         freq_min, freq_max = freq_range
-        time_start, time_end = (time_range_idx[0] * self.tsamp, time_range_idx[1] * self.tsamp)
+        time_start, time_end = (time_range_idx[0] * self.tsamp,
+                                time_range_idx[1] * self.tsamp)
 
         patch_data = patch_data.to(self.device).unsqueeze(0)  # (1, 1, t, f)
         with torch.no_grad():
@@ -279,9 +291,8 @@ class SETIWaterfallRenderer(QWidget):
         patch_np = patch_data.squeeze().cpu().numpy()
 
         # High DPI figure for sharper text
-        fig, axs = plt.subplots(3, 1, figsize=(6, 8), dpi=200,
-                                gridspec_kw={'height_ratios': [4, 4, 1]})
-        fig.subplots_adjust(left=0.08, right=0.95, bottom=0.05, top=0.95, hspace=0.25)
+        fig, axs = plt.subplots(2, 1, figsize=(6, 8.5), dpi=200)
+        fig.subplots_adjust(left=0.08, right=0.95, bottom=0.05, top=0.95, hspace=0.3)
 
         # Common plot params
         label_font = 12
@@ -307,11 +318,6 @@ class SETIWaterfallRenderer(QWidget):
         cbar1 = fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
         cbar1.set_label("Intensity", fontsize=label_font)
 
-        # Hits info (bigger font for clarity)
-        hits_text = self.load_additional_info(row, col, denoised_np)
-        axs[2].axis('off')
-        axs[2].text(0.01, 0.95, hits_text, va='top', ha='left', wrap=True, fontsize=11)
-
         # Convert high-res matplotlib figure to QPixmap
         fig.canvas.draw()
         width, height = fig.canvas.get_width_height()
@@ -319,11 +325,15 @@ class SETIWaterfallRenderer(QWidget):
 
         # Downscale to QLabel size → keeps sharpness
         pixmap = QPixmap.fromImage(img).scaled(
-            270, 350, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            270, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
 
         self.image_label.setPixmap(pixmap)
-        self.image_label.setFixedSize(270, 350)
+        self.image_label.setFixedSize(270, 300)
+
+        # Update hits info in the sidebar (display as text)
+        hits_text = self.load_additional_info(row, col, denoised_np, )
+        self.hits_label.setText(hits_text)
 
         plt.close(fig)
 
@@ -344,9 +354,9 @@ class SETIWaterfallRenderer(QWidget):
             patch=denoised_np,
             tsamp=self.tsamp,
             foff=self.foff,
-            max_drift=4.0,
-            min_drift=0.1,
-            snr_threshold=10.0
+            max_drift=self.drift[0],
+            min_drift=self.drift[1],
+            snr_threshold=self.snr_threshold
         )
 
         if df_hits.empty:

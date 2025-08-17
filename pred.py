@@ -16,7 +16,7 @@ from pipeline.renderer import SETIWaterfallRenderer
 from utils.pred_core import pred
 
 
-def main(mode=None, ui=False, obs=False, *args):
+def main(mode=None, ui=False, obs=False, verbose=False, *args):
     # Set random seeds
     torch.manual_seed(42)
     np.random.seed(42)
@@ -33,6 +33,7 @@ def main(mode=None, ui=False, obs=False, *args):
 
     # Common file path for observation data
     obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
+    # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
 
     # Create datasets based on mode and obs flag
     if obs and mode != "pipeline":
@@ -74,6 +75,10 @@ def main(mode=None, ui=False, obs=False, *args):
     dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
     unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 
+    # hits conf info
+    drift = [0.05, 4.0]
+    snr_threshold = 10.0
+
     if mode == "dbl":
         pred_dir = Path(pred_dir) / "dbl"
         print("[\033[32mInfo\033[0m] Running dual-model comparison mode")
@@ -104,13 +109,15 @@ def main(mode=None, ui=False, obs=False, *args):
         if ui:
             # Create and show the renderer
             app = QApplication(sys.argv)
-            renderer = SETIWaterfallRenderer(dataset, model, device)
+            renderer = SETIWaterfallRenderer(dataset, model, device, drift=drift, snr_threshold=snr_threshold,
+                                             verbose=verbose)
             renderer.setWindowTitle("SETI Waterfall Data Processor")
             renderer.show()
             sys.exit(app.exec_())
         else:
             print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
-            processor = SETIPipelineProcessor(dataset, model, device)
+            processor = SETIPipelineProcessor(dataset, model, device, drift=drift, snr_threshold=snr_threshold,
+                                              verbose=verbose)
             processor.process_all_patches()
 
     else:
@@ -150,11 +157,17 @@ if __name__ == "__main__":
         default=False,
         help="Use observation data file for default and dbl modes"
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Use verbose output for pipeline mode"
+    )
     args = parser.parse_args()
 
     if args.mode is None:
-        main(None, args.ui, args.obs, True, False)
+        main(None, args.ui, args.obs, args.verbose, True, False)
     elif args.mode == "dbl":
-        main("dbl", args.ui, args.obs)
+        main("dbl", args.ui, args.obs, args.verbose)
     elif args.mode == "pipeline":
-        main("pipeline", args.ui, args.obs)
+        main("pipeline", args.ui, args.obs, args.verbose)
