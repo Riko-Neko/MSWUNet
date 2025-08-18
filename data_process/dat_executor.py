@@ -115,7 +115,7 @@ def analyze_hits(file1: str, file2: str, output_dir: str):
 
 
 if __name__ == '__main__':
-    file1 = ""
-    file2 = ""
+    file1 = "../pipeline/log/seti_pipeline.dat"
+    file2 = "../data_process/test_out/truboseti_blis692ns/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.dat"
     output_dir = "./analysis_out"
     analyze_hits(file1, file2, output_dir)

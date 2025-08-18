@@ -129,13 +129,13 @@ class DynamicSpectrumDataset(Dataset):
         # 随机 RFI 配置
         rfi_params = {
             'NBC': np.random.randint(1, self.fchans // 128),
-            'NBC_amp': np.random.uniform(1, 25),
+            'NBC_amp': np.random.uniform(0.25, 25),
             'NBT': np.random.randint(1, self.tchans // 16),
-            'NBT_amp': np.random.uniform(1, 50),
+            'NBT_amp': np.random.uniform(0.25, 50),
             'BBT': np.random.randint(0, self.fchans // 512),
-            'BBT_amp': np.random.uniform(1, 25),
+            'BBT_amp': np.random.uniform(0.5, 25),
             'LowDrift': np.random.randint(1, 5),
-            'LowDrift_amp': np.random.uniform(1, 25),
+            'LowDrift_amp': np.random.uniform(0.1, 25),
             'LowDrift_width': np.random.uniform(7.5, 15),
             'NegBand': np.random.randint(0, 2),
             'NegBand_amp': np.random.uniform(1, 10),

@@ -1,22 +1,23 @@
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import torch
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QPainter, QImage, QPixmap
+from PyQt5.QtGui import QColor, QPainter, QImage, QPixmap, QFont
 from PyQt5.QtWidgets import (QWidget, QToolTip, QLabel,
-                             QVBoxLayout, QHBoxLayout, QPushButton, QScrollArea)
+                             QVBoxLayout, QHBoxLayout, QPushButton, QScrollArea, QTableWidget, QTableWidgetItem)
 
-from pipeline.metrics import execute_hits
+from pipeline.metrics import execute_hits_hough
 from pipeline.pipeline_processor import SETIPipelineProcessor
 
 
 class SETIWaterfallRenderer(QWidget):
     def __init__(self, dataset, model, device, log_dir=Path("./pipeline/log"), verbose=False, parent=None,
-                 drift=[0.05, 4.0], snr_threshold=10.0):
+                 drift=[0.05, 4.0], snr_threshold=5.0, min_abs_drift=0.05):
         """
         Initialize the SETI waterfall renderer with dataset and model
 
@@ -30,6 +31,7 @@ class SETIWaterfallRenderer(QWidget):
         super().__init__(parent)
         self.drift = drift
         self.snr_threshold = snr_threshold
+        self.min_abs_drift = min_abs_drift
 
         self.processor = SETIPipelineProcessor(dataset, model, device, log_dir=log_dir, verbose=verbose)
         self.dataset = self.processor.dataset
@@ -177,9 +179,16 @@ class SETIWaterfallRenderer(QWidget):
         hits_title = QLabel("Hits Info:")
         hits_title.setStyleSheet("font-weight: bold;")
         info_layout.addWidget(hits_title)
-        self.hits_label = QLabel("")
-        self.hits_label.setWordWrap(True)
-        info_layout.addWidget(self.hits_label)
+        self.hits_table = QTableWidget(self)
+        self.hits_table.setWordWrap(False)
+        self.hits_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.hits_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        font = QFont()
+        font.setPointSize(9)  # Smaller font size
+        self.hits_table.setFont(font)
+        self.hits_table.horizontalHeader().setFont(font)
+        self.hits_table.verticalHeader().setFont(font)
+        info_layout.addWidget(self.hits_table)
         info_layout.addStretch()
 
         main_layout.addWidget(self.info_panel)
@@ -280,9 +289,10 @@ class SETIWaterfallRenderer(QWidget):
         - Additional hits info (text) shown in the sidebar
         """
         patch_data, freq_range, time_range_idx = self.dataset.get_patch(row, col)
-        freq_min, freq_max = freq_range
+        freq_min, freq_max = freq_range  # MHz
         time_start, time_end = (time_range_idx[0] * self.tsamp,
                                 time_range_idx[1] * self.tsamp)
+        tchans = time_range_idx[1] - time_range_idx[0]
 
         patch_data = patch_data.to(self.device).unsqueeze(0)  # (1, 1, t, f)
         with torch.no_grad():
@@ -291,8 +301,8 @@ class SETIWaterfallRenderer(QWidget):
         patch_np = patch_data.squeeze().cpu().numpy()
 
         # High DPI figure for sharper text
-        fig, axs = plt.subplots(2, 1, figsize=(6, 8.5), dpi=200)
-        fig.subplots_adjust(left=0.08, right=0.95, bottom=0.05, top=0.95, hspace=0.3)
+        fig, axs = plt.subplots(2, 1, figsize=(8, 8.5), dpi=200)
+        fig.subplots_adjust(left=0.1, right=0.95, bottom=0.05, top=0.95, hspace=0.3)
 
         # Common plot params
         label_font = 12
@@ -300,23 +310,44 @@ class SETIWaterfallRenderer(QWidget):
 
         # Original spectrum
         im0 = axs[0].imshow(patch_np, aspect='auto', origin='lower',
-                            extent=[time_start, time_end, freq_min, freq_max],
+                            extent=[freq_min, freq_max, time_start, time_end],
                             cmap='viridis')
-        axs[0].set_xlabel("Time (seconds)", fontsize=label_font)
-        axs[0].set_ylabel("Frequency (MHz)", fontsize=label_font)
-        axs[0].set_title(f"Original Spectrum\nCell ({col}, {row})", fontsize=title_font)
+        axs[0].set_ylabel("Time (seconds)", fontsize=label_font)
+        axs[0].set_xlabel("Frequency (MHz)", fontsize=label_font)
+        axs[0].set_title(f"Original Spectrum\nCell ({row}, {col})", fontsize=title_font)
         cbar0 = fig.colorbar(im0, ax=axs[0], fraction=0.046, pad=0.04)
         cbar0.set_label("Intensity", fontsize=label_font)
 
         # Denoised spectrum
         im1 = axs[1].imshow(denoised_np, aspect='auto', origin='lower',
-                            extent=[time_start, time_end, freq_min, freq_max],
+                            extent=[freq_min, freq_max, time_start, time_end],
                             cmap='viridis')
-        axs[1].set_xlabel("Time (seconds)", fontsize=label_font)
-        axs[1].set_ylabel("Frequency (MHz)", fontsize=label_font)
-        axs[1].set_title(f"Denoised Spectrum\nCell ({col}, {row})", fontsize=title_font)
+        axs[1].set_ylabel("Time (seconds)", fontsize=label_font)
+        axs[1].set_xlabel("Frequency (MHz)", fontsize=label_font)
+        axs[1].set_title(f"Denoised Spectrum\nCell ({row}, {col})", fontsize=title_font)
         cbar1 = fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
         cbar1.set_label("Intensity", fontsize=label_font)
+
+        # Load hits info and draw detected signal lines
+        patch_np_for_hits = patch_np  # (t, f)
+        df_hits = self.load_additional_info(row, col, denoised_np)
+        if not df_hits.empty:
+            for i, (_, hit) in enumerate(df_hits.iterrows()):
+                drift_rate = hit['DriftRate']
+                uncorr_freq = hit['Uncorrected_Frequency']
+                t_vals = np.arange(0, tchans) * self.tsamp  # [s]
+                f_abs_Hz = uncorr_freq + drift_rate * t_vals  # Hz
+                f_abs_MHz = freq_min - f_abs_Hz * 1e-6  # MHz
+                axs[1].plot(f_abs_MHz, t_vals, 'g--', label='Fit' if i == 0 else None, alpha=0.8)
+            axs[1].legend()
+
+        # Convert frequencies to absolute MHz for display
+        if not df_hits.empty:
+            df_hits['Uncorrected_Frequency'] = freq_min - (df_hits['Uncorrected_Frequency'] / 1e6)
+            if 'freq_start' in df_hits.columns:
+                df_hits['freq_start'] = freq_min - (df_hits['freq_start'] / 1e6)
+            if 'freq_end' in df_hits.columns:
+                df_hits['freq_end'] = freq_min - (df_hits['freq_end'] / 1e6)
 
         # Convert high-res matplotlib figure to QPixmap
         fig.canvas.draw()
@@ -332,10 +363,28 @@ class SETIWaterfallRenderer(QWidget):
         self.image_label.setFixedSize(270, 300)
 
         # Update hits info in the sidebar (display as text)
-        hits_text = self.load_additional_info(row, col, denoised_np, )
-        self.hits_label.setText(hits_text)
+        self.update_hits_table(df_hits)
 
         plt.close(fig)
+
+    def update_hits_table(self, df_hits):
+        self.hits_table.clear()
+        if df_hits is None or df_hits.empty:
+            self.hits_table.setRowCount(0)
+            self.hits_table.setColumnCount(0)
+        else:
+            self.hits_table.setRowCount(len(df_hits))
+            self.hits_table.setColumnCount(len(df_hits.columns))
+            self.hits_table.setHorizontalHeaderLabels(df_hits.columns)
+            for i in range(len(df_hits)):
+                for j, col in enumerate(df_hits.columns):
+                    value = df_hits.iloc[i, j]
+                    if col in ['Uncorrected_Frequency', 'freq_start', 'freq_end']:
+                        formatted_value = f"{value:.6f}"  # 6 decimal places for frequencies
+                    else:
+                        formatted_value = f"{value:.2f}" if isinstance(value, (int, float)) else str(value)
+                    self.hits_table.setItem(i, j, QTableWidgetItem(formatted_value))
+            self.hits_table.resizeColumnsToContents()
 
     def load_additional_info(self, row, col, denoised_np):
         """
@@ -350,19 +399,21 @@ class SETIWaterfallRenderer(QWidget):
             str: Formatted hits information
         """
         # Execute hits detection on denoised data
-        df_hits = execute_hits(
+        df_hits = execute_hits_hough(
             patch=denoised_np,
             tsamp=self.tsamp,
             foff=self.foff,
-            max_drift=self.drift[0],
-            min_drift=self.drift[1],
-            snr_threshold=self.snr_threshold
+            max_drift=self.drift[1],
+            min_drift=self.drift[0],
+            snr_threshold=self.snr_threshold,
+            min_abs_drift=self.min_abs_drift,
+            merge_tol=10000
         )
 
         if df_hits.empty:
-            return "No hits detected."
+            return df_hits
         else:
-            return "Detected Hits:\n" + df_hits.to_string(index=False)
+            return df_hits
 
 
 class GridContent(QWidget):
@@ -480,7 +531,7 @@ class GridContent(QWidget):
             else:
                 status_str = f"No signal (Confidence: {confidence:.2f})"
 
-            tooltip = (f"Cell ({c}, {r})\n"
+            tooltip = (f"Cell ({r}, {c})\n"
                        f"Status: {status_str}\n"
                        f"Frequency: {freq_min:.4f} - {freq_max:.4f} MHz\n"
                        f"Time: {time_start:.2f} - {time_end:.2f} seconds")

@@ -1,15 +1,16 @@
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import torch
 
-from pipeline.metrics import execute_hits
+from pipeline.metrics import execute_hits_hough
 
 
 class SETIPipelineProcessor:
     def __init__(self, dataset, model, device, log_dir=Path("./pipeline/log"), verbose=False, drift=[0.05, 4.0],
-                 snr_threshold=10.0):
+                 snr_threshold=5.0, min_abs_drift=0.05):
         """
         Initialize the SETI pipeline processor with dataset and model
 
@@ -45,11 +46,15 @@ class SETIPipelineProcessor:
 
         self.drift = drift
         self.snr_threshold = snr_threshold
+        self.min_abs_drift = min_abs_drift
 
         # Logging setup
+        if log_dir != Path("./pipeline/log"):
+            log_dir = Path("./pipeline/log") / log_dir
         log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Overwrite log file if it exists
-        file_handler = logging.FileHandler(log_dir / "seti_pipeline.log", mode='w')
+        file_handler = logging.FileHandler(log_dir / f"pipeline_{timestamp}.log", mode='w')
         file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 
@@ -63,7 +68,7 @@ class SETIPipelineProcessor:
         logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
         self.logger = logging.getLogger(__name__)
         self.verbose = verbose
-        self.hits_file = log_dir / "hits.dat"
+        self.hits_file = log_dir / f"hits_{timestamp}.dat"
         # Remove existing hits file to override
         if self.hits_file.exists():
             try:
@@ -107,14 +112,26 @@ class SETIPipelineProcessor:
             df_hits = pd.DataFrame()
             if status is True:
                 denoised_np = denoised.squeeze().cpu().numpy()
-                df_hits = execute_hits(
+                df_hits = execute_hits_hough(
                     patch=denoised_np,
                     tsamp=self.tsamp,
                     foff=self.foff,
                     max_drift=self.drift[1],
                     min_drift=self.drift[0],
-                    snr_threshold=self.snr_threshold
+                    snr_threshold=self.snr_threshold,
+                    min_abs_drift=self.min_abs_drift,
+                    merge_tol=10000
                 )
+
+                if not df_hits.empty:
+                    # Convert relative frequencies (in Hz) to absolute frequencies (in MHz)
+                    freq_min = freq_range[0]
+                    df_hits['Uncorrected_Frequency'] = freq_min - (df_hits['Uncorrected_Frequency'] / 1e6)
+                    if 'freq_start' in df_hits.columns:
+                        df_hits['freq_start'] = freq_min - (df_hits['freq_start'] / 1e6)
+                    if 'freq_end' in df_hits.columns:
+                        df_hits['freq_end'] = freq_min - (df_hits['freq_end'] / 1e6)
+
                 hits_info = df_hits.to_string(index=False) if not df_hits.empty else "No hits detected."
 
                 if not df_hits.empty:
@@ -136,7 +153,7 @@ class SETIPipelineProcessor:
         self.freq_ranges[row][col] = freq_range
         self.time_ranges[row][col] = time_range
 
-        # Log to file (and console if not simple_output)
+        # Log to file (and console if verbose)
         status_str = "Signal detected" if status is True else "No signal" if status is False else "Uncertain"
         log_msg = f"Processed cell ({row}, {col}): {status_str} (Confidence: {confidence:.2f})\n"
         log_msg += f"Frequency: {freq_range[0]:.4f} - {freq_range[1]:.4f} MHz\n"
@@ -155,13 +172,13 @@ class SETIPipelineProcessor:
             print(
                 f"[\033[35mML\033[0m] Found candidate in cell ({row}, {col}), frequency: {freq_range[0]:.4f} - {freq_range[1]:.4f} MHz")
             if not df_hits.empty:
-                for i in range(len(df_hits)):
+                for idx, row in df_hits.iterrows():
                     print(
-                        f"[\033[36mHit\033[0m] Found signal {i + 1}: "
-                        f"SNR=\033[32m{df_hits.at[i, 'SNR']:.2f}\033[0m, "
-                        f"DriftRate=\033[32m{df_hits.at[i, 'DriftRate']:.2f}\033[0m, "
-                        f"Freq=\033[35m{df_hits.at[i, 'Uncorrected_Frequency']:.2f} Hz\033[0m, "
-                        f"Range=[{df_hits.at[i, 'freq_start']:.2f}, {df_hits.at[i, 'freq_end']:.2f}]"
+                        f"[\033[36mHit\033[0m] Found signal {idx + 1}: "
+                        f"SNR=\033[32m{row['SNR']:.2f}\033[0m, "
+                        f"DriftRate=\033[32m{row['DriftRate']:.4f} Hz/s\033[0m, "
+                        f"Freq=\033[32m{row['Uncorrected_Frequency']:.6f}\033[0m Mhz, "
+                        f"Range=[{row['freq_start']:.6f}, {row['freq_end']:.6f}] MHz"
                     )
         return {
             'status': status,

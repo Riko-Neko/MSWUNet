@@ -34,6 +34,16 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
     # Common file path for observation data
     obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
     # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
+    file_stem = Path(obs_file_path).stem
+
+    # Default simulated dataset
+    tchans = 144
+    fchans = 1024
+    df = 7.5
+    dt = 1.0
+    drift_min = -4.0
+    drift_max = 4.0
+    drift_min_abs = df // (tchans * dt)
 
     # Create datasets based on mode and obs flag
     if obs and mode != "pipeline":
@@ -47,14 +57,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
         )
         pred_dataloader = DataLoader(dataset, batch_size=1, num_workers=0, pin_memory=True)
     else:
-        # Default simulated dataset
-        tchans = 144
-        fchans = 1024
-        df = 7.5
-        dt = 1.0
-        drift_min = -4.0
-        drift_max = 4.0
-        drift_min_abs = df // (tchans * dt)
+
         pred_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
                                               drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.05,
                                               snr_min=20.0, snr_max=30.0, width_min=10, width_max=30,
@@ -76,8 +79,8 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
     unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 
     # hits conf info
-    drift = [0.05, 4.0]
-    snr_threshold = 10.0
+    drift = [-4.0, 4.0]
+    snr_threshold = 20.0
 
     if mode == "dbl":
         pred_dir = Path(pred_dir) / "dbl"
@@ -109,15 +112,15 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
         if ui:
             # Create and show the renderer
             app = QApplication(sys.argv)
-            renderer = SETIWaterfallRenderer(dataset, model, device, drift=drift, snr_threshold=snr_threshold,
-                                             verbose=verbose)
+            renderer = SETIWaterfallRenderer(dataset, model, device, log_dir=file_stem, drift=drift,
+                                             snr_threshold=snr_threshold, min_abs_drift=drift_min_abs, verbose=verbose)
             renderer.setWindowTitle("SETI Waterfall Data Processor")
             renderer.show()
             sys.exit(app.exec_())
         else:
             print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
-            processor = SETIPipelineProcessor(dataset, model, device, drift=drift, snr_threshold=snr_threshold,
-                                              verbose=verbose)
+            processor = SETIPipelineProcessor(dataset, model, device, log_dir=file_stem, drift=drift,
+                                              snr_threshold=snr_threshold, min_abs_drift=drift_min_abs, verbose=verbose)
             processor.process_all_patches()
 
     else:

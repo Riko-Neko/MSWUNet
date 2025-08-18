@@ -238,7 +238,22 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             drift_rate = np.random.uniform(-0.0001, 0.0001) * u.Hz / u.s
             path = stg.constant_path(f_start=f_start, drift_rate=drift_rate)
             level = rfi_params.get('LowDrift_amp', 5.0) * noise_x_std
+            # 默认 constant 调制
             t_profile = stg.constant_t_profile(level=level)
+            # 以 0.3 概率应用时间调制
+            if np.random.rand() < 0.3:
+                if np.random.rand() < 0.5:  # 一半概率 sine
+                    t_period = tchans / 2 * np.random.uniform(0.1, 1.5) * u.s
+                    t_amplitude = level
+                    t_profile = stg.sine_t_profile(period=t_period, amplitude=t_amplitude, level=level)
+                else:  # 一半概率 pulse
+                    pulse_width = tchans / 10 * np.random.uniform(0.1, 1.5)
+                    p_period = tchans / 5 * np.random.uniform(0.1, 1.5)
+                    p_amplitude = 1.0 * np.random.uniform(0.1, 1.5)
+                    min_level = 0.0
+                    t_profile = stg.periodic_gaussian_t_profile(pulse_width=pulse_width, period=p_period,
+                                                                amplitude=p_amplitude, level=level, min_level=min_level)
+            # 频率与带宽 profile
             width = rfi_params.get('LowDrift_width', 2.0) * u.Hz
             f_profile = stg.gaussian_f_profile(width=width)
             bp_profile = stg.constant_bp_profile(1.0)
@@ -361,8 +376,8 @@ if __name__ == "__main__":
     }
 
     sim_dynamic_spec_seti(
-        fchans=4096,
-        tchans=512,
+        fchans=1024,
+        tchans=144,
         df=7.5,
         dt=1.0,
         fch1=1.42e9,
