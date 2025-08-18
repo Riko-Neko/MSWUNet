@@ -37,13 +37,15 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
     file_stem = Path(obs_file_path).stem
 
     # Default simulated dataset
-    tchans = 144
+    tchans = 16
     fchans = 1024
     df = 7.5
-    dt = 1.0
+    dt = 18.0
     drift_min = -4.0
     drift_max = 4.0
     drift_min_abs = df // (tchans * dt)
+    patch_t = 16
+    patch_f = 1024
 
     # Create datasets based on mode and obs flag
     if obs and mode != "pipeline":
@@ -51,8 +53,8 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
         print("[\033[32mInfo\033[0m] Using observation data from:", obs_file_path)
         dataset = SETIWaterFullDataset(
             file_path=obs_file_path,
-            patch_t=144,
-            patch_f=1024,
+            patch_t=patch_t,
+            patch_f=patch_f,
             overlap_pct=0.02
         )
         pred_dataloader = DataLoader(dataset, batch_size=1, num_workers=0, pin_memory=True)
@@ -103,8 +105,8 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
         # Create dataset (always uses observation data)
         dataset = SETIWaterFullDataset(
             file_path=obs_file_path,
-            patch_t=144,
-            patch_f=1024,
+            patch_t=patch_t,
+            patch_f=patch_f,
             overlap_pct=0.02
         )
         # Load model
