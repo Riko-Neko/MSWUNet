@@ -108,7 +108,8 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
             file_path=obs_file_path,
             patch_t=patch_t,
             patch_f=patch_f,
-            overlap_pct=0.02
+            overlap_pct=0.02,
+            device=device
         )
         # Load model
         model = load_model(DWTNet, dwtnet_ckpt, in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4')

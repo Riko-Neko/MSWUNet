@@ -23,8 +23,9 @@ else:  # Linux
 
 
 class SETIWaterFullDataset(Dataset):
-    def __init__(self, file_path, patch_t, patch_f, overlap_pct=0.05):
+    def __init__(self, file_path, patch_t, patch_f, overlap_pct=0.05, device="cpu"):
         self.obs = Waterfall(file_path, load_data=True)  # Load is a MUST
+        self.device = device
         # obs.data_shape is (tchans, n_pols, fchans)
         self.tchans = self.obs.selection_shape[0]
         self.fchans = self.obs.selection_shape[2]
@@ -73,7 +74,7 @@ class SETIWaterFullDataset(Dataset):
 
         # Load data
         # print("[\033[33mDebug\033[0m] Grabbing data...")
-        patch_freqs, data = self.obs.grab_data(f_start, f_stop, start_t, end_t)
+        patch_freqs, data = self.obs.grab_data(f_start, f_stop, start_t, end_t, device=self.device)
 
         # Normalize
         # print("[\033[33mDebug\033[0m] Normalizing data...")
