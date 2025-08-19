@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import Dataset
 
 from external.Waterfall import Waterfall
+
 # from blimpy import Waterfall
 
 system = platform.system()
@@ -118,6 +119,7 @@ def plot_dataset_item(dataset, index=0, cmap='viridis', log_scale=False):
     """
     # Get data and position info
     patch_tensor, (start_t, start_f) = dataset[index]
+    print("[\033[33mDebug\033[0m] Data shape:", patch_tensor.shape)
     data = patch_tensor.squeeze(0).numpy()  # Remove channel dim -> (T, F)
 
     # Calculate frequency range
@@ -170,13 +172,9 @@ def plot_dataset_item(dataset, index=0, cmap='viridis', log_scale=False):
 # Usage example
 if __name__ == "__main__":
     # Initialize dataset
-    dataset = SETIWaterFullDataset(
-        file_path="../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil",
-        # Replace with actual file path
-        patch_t=144,
-        patch_f=1024,
-        overlap_pct=0.02
-    )
+    fname = '../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil'
+    # fname = "../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
+    dataset = SETIWaterFullDataset(file_path=fname, patch_t=16, patch_f=1024, overlap_pct=0.02)
 
     # Randomly check some patch
     for i in np.random.choice(len(dataset), 10, replace=False):

@@ -82,7 +82,7 @@ class Waterfall():
 
         # Cache freqs and timestamps once in init
         start = time.time()
-        self.freqs = self.container.populate_freqs().astype(np.float32)  # Cache freqs as float32
+        self.freqs = self.container.populate_freqs()  # Cache freqs
         print(f"Waterfall.__init__ - populate_freqs: {time.time() - start:.3f} seconds")
         start = time.time()
         self.timestamps = self.container.populate_timestamps()  # Cache timestamps
@@ -250,8 +250,7 @@ class Waterfall():
 
         return n_coarse_chan
 
-    def grab_data(self, f_start=None, f_stop=None, t_start=None, t_stop=None, if_id=0, patch_freq_ranges=None,
-                  freq_indices=None):
+    def grab_data(self, f_start=None, f_stop=None, t_start=None, t_stop=None, if_id=0, verbose=False, device='cpu'):
         """ Extract a portion of data by frequency range.
 
         Args:
@@ -260,8 +259,7 @@ class Waterfall():
             t_start (int): start integration ID
             t_stop (int): stop integration ID
             if_id (int): IF input identification
-            patch_freq_ranges (list): Precomputed (f_min, f_max) pairs
-            freq_indices (list): Precomputed (i0, i1) indices
+            verbose (bool): Whether to print timing information
 
         Returns:
             (freqs, data) (np.arrays): frequency axis in MHz and data subset
@@ -273,19 +271,22 @@ class Waterfall():
         if self.container.isheavy():
             raise Exception(
                 "Waterfall.grab_data: Large data array was not loaded! Try instantiating Waterfall with max_load.")
-        print(f"Step 1 - isheavy check: {time.time() - start:.3f} seconds")
+        if verbose:
+            print(f"Step 1 - isheavy check: {time.time() - start:.3f} seconds")
 
         # Step 2: Use cached frequencies
         start = time.time()
         if not hasattr(self, 'freqs') or self.freqs is None:
             self.freqs = self.container.populate_freqs()
-        print(f"Step 2 - populate_freqs (or cached): {time.time() - start:.3f} seconds")
+        if verbose:
+            print(f"Step 2 - populate_freqs (or cached): {time.time() - start:.3f} seconds")
 
         # Step 3: Use cached timestamps
         start = time.time()
         if not hasattr(self, 'timestamps') or self.timestamps is None:
             self.timestamps = self.container.populate_timestamps()
-        print(f"Step 3 - populate_timestamps (or cached): {time.time() - start:.3f} seconds")
+        if verbose:
+            print(f"Step 3 - populate_timestamps (or cached): {time.time() - start:.3f} seconds")
 
         # Step 4: Set default frequency range
         start = time.time()
@@ -293,13 +294,26 @@ class Waterfall():
             f_start = self.freqs[0]
         if f_stop is None:
             f_stop = self.freqs[-1]
-        print(f"Step 4 - Set default frequency range: {time.time() - start:.3f} seconds")
+        if verbose:
+            print(f"Step 4 - Set default frequency range: {time.time() - start:.3f} seconds")
 
-        # Step 5: Use cupy if available, to accelerate indexing
+        # Step 5: Frequency indexing
         start = time.time()
-        i0 = np.argmin(np.abs(self.freqs - f_start))
-        i1 = np.argmin(np.abs(self.freqs - f_stop))
-        print(f"Step 5 - Frequency indexing: {time.time() - start:.3f} seconds")
+
+        if device == "cuda":
+            import torch
+            freqs_t = torch.as_tensor(self.freqs, device="cuda")
+            f0 = torch.tensor(float(f_start), device="cuda")
+            f1 = torch.tensor(float(f_stop), device="cuda")
+            i0 = int(torch.argmin(torch.abs(freqs_t - f0)).item())
+            i1 = int(torch.argmin(torch.abs(freqs_t - f1)).item())
+            path_used = "torch.cuda"
+        else:
+            i0 = int(np.argmin(np.abs(self.freqs - f_start)))
+            i1 = int(np.argmin(np.abs(self.freqs - f_stop)))
+            path_used = "numpy"
+        if verbose:
+            print(f"Step 5 - Frequency indexing ({path_used}): {time.time() - start:.3f} seconds")
 
         # Step 6: Slice data
         start = time.time()
@@ -309,9 +323,11 @@ class Waterfall():
         else:
             plot_f = self.freqs[i1:i0 + 1]
             plot_data = np.squeeze(self.data[t_start:t_stop, if_id, i1:i0 + 1]).astype(np.float32)
-        print(f"Step 6 - Data slicing and squeeze: {time.time() - start:.3f} seconds")
+        if verbose:
+            print(f"Step 6 - Data slicing and squeeze: {time.time() - start:.3f} seconds")
 
         # Print total time
-        print(f"Total grab_data execution: {time.time() - start_total:.3f} seconds")
+        if verbose:
+            print(f"Total grab_data execution: {time.time() - start_total:.3f} seconds")
 
         return plot_f, plot_data

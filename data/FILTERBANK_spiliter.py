@@ -81,8 +81,8 @@ def slice_filterbank_by_freq(filename, chunk_size, part_index, output_format='fi
 
 
 if __name__ == '__main__':
-    fname = '../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil'
+    fname = './BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil'
     # Slice into chunks of 100,000 channels, save the 2nd chunk (index 1: channels 100,000-199,999)
-    output_file = slice_filterbank_by_freq(fname, chunk_size=1000, part_index=0, output_format='fil',
-                                           max_load=1.0)
+    output_file = slice_filterbank_by_freq(fname, chunk_size=102400, part_index=0, output_format='fil',
+                                           max_load=3.0)
     # Output: large_data_chunk100000_part1.fil (format identical, but fchans=100,000)
