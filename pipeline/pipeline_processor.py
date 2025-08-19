@@ -22,7 +22,7 @@ class SETIPipelineProcessor:
             verbose: Whether to use simple console output
         """
         self.dataset = dataset
-        self.model = model
+        self.model = model.to(device)
         self.device = device
 
         # Grid dimensions
@@ -88,14 +88,17 @@ class SETIPipelineProcessor:
             dict: Processing results including status, confidence, ranges
         """
         # Get data
+        # print("[\033[33mDebug\033[0m] Getting patch...")
         patch_data, freq_range, time_range_idx = self.dataset.get_patch(row, col)
         time_range = (time_range_idx[0] * self.tsamp, time_range_idx[1] * self.tsamp)
 
         # Prepare data
+        # print("[\033[33mDebug\033[0m] Moving patch...")
         patch_data = patch_data.to(self.device).unsqueeze(0)  # (1, 1, t, f)
 
         # Inference
         with torch.no_grad():
+            # print("[\033[33mDebug\033[0m] Predicting patch...")
             denoised, mask, logits = self.model(patch_data)
             probs = torch.sigmoid(logits)
             confidence = probs.mean().item()
@@ -108,6 +111,7 @@ class SETIPipelineProcessor:
                 status = None
 
             # If signal detected with high confidence, compute hits
+            # print("[\033[33mDebug\033[0m] Computing hits...")
             hits_info = None
             df_hits = pd.DataFrame()
             if status is True:

@@ -176,8 +176,9 @@ def execute_hits_peaks(patch: np.ndarray, tsamp: float, foff: float, max_drift: 
         count = 0
         for t in range(n_time):
             chan_t = intercept + slope * t
-            if 0 <= chan_t < n_freq:
-                chan_int = round(chan_t)
+            chan_idx = round(chan_t)
+            if 0 <= chan_idx < n_freq:
+                chan_int = int(chan_idx)
                 total += patch[t, chan_int]
                 count += 1
 
@@ -293,8 +294,9 @@ def execute_hits_hough(patch: np.ndarray, tsamp: float, foff: float, max_drift: 
         count = 0
         for t in range(n_time):
             chan_t = intercept + (drift_rate * tsamp / foff) * t
-            if 0 <= chan_t < n_freq:
-                total += patch[t, round(chan_t)]
+            chan_idx = round(chan_t)
+            if 0 <= chan_idx < n_freq:  # 确保索引在有效范围内
+                total += patch[t, int(chan_idx)]
                 count += 1
         if count == 0:
             continue
