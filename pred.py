@@ -46,7 +46,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
     drift_max = 4.0
     drift_min_abs = df // (tchans * dt)
     patch_t = 16
-    patch_f = 1024
+    patch_f = 4096
 
     # Create datasets based on mode and obs flag
     if obs and mode != "pipeline":
@@ -77,7 +77,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
 
     # Prediction configuration
     pred_dir = "./pred_results"
-    pred_steps = 10
+    pred_steps = 100
     dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
     unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 

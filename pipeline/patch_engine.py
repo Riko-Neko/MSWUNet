@@ -23,7 +23,7 @@ else:  # Linux
 
 
 class SETIWaterFullDataset(Dataset):
-    def __init__(self, file_path, patch_t, patch_f, overlap_pct=0.05, device="cpu"):
+    def __init__(self, file_path, patch_t, patch_f, overlap_pct=0.02, device="cpu"):
         self.obs = Waterfall(file_path, load_data=True)  # Load is a MUST
         self.device = device
         # obs.data_shape is (tchans, n_pols, fchans)
@@ -86,6 +86,7 @@ class SETIWaterFullDataset(Dataset):
 
         # To tensor
         patch_tensor = torch.from_numpy(data).float().unsqueeze(0)  # (1, patch_t, patch_f)
+        # print("[\033[33mDebug\033[0m] Data shape:", patch_tensor.shape)
 
         return patch_tensor, (start_t, start_f)
 
@@ -120,7 +121,7 @@ def plot_dataset_item(dataset, index=0, cmap='viridis', log_scale=False):
     """
     # Get data and position info
     patch_tensor, (start_t, start_f) = dataset[index]
-    print("[\033[33mDebug\033[0m] Data shape:", patch_tensor.shape)
+    # print("[\033[33mDebug\033[0m] Data shape:", patch_tensor.shape)
     data = patch_tensor.squeeze(0).numpy()  # Remove channel dim -> (T, F)
 
     # Calculate frequency range

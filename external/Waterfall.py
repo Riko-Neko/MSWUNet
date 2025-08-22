@@ -3,6 +3,7 @@ import sys
 import time
 
 import numpy as np
+import torch
 
 SHOWING_BACKEND = False
 
@@ -87,6 +88,11 @@ class Waterfall():
         start = time.time()
         self.timestamps = self.container.populate_timestamps()  # Cache timestamps
         print(f"Waterfall.__init__ - populate_timestamps: {time.time() - start:.3f} seconds")
+
+        start = time.time()
+        self.is_monotonic_inc = np.all(np.diff(self.freqs) >= 0)
+        self.is_monotonic_dec = np.all(np.diff(self.freqs) <= 0)
+        print(f"Waterfall.__init__ - is_monotonic_inc/dec: {time.time() - start:.3f} seconds")
 
         # These values will be modified once code for multi_beam and multi_stokes observations are possible.
         self.freq_axis = 2
@@ -299,19 +305,47 @@ class Waterfall():
 
         # Step 5: Frequency indexing
         start = time.time()
+        if verbose and (not self.is_monotonic_inc and not self.is_monotonic_dec):
+            print(f"[\033[32mInfo\033[0m] Using {device} for data extraction.")
+        elif verbose:
+            print(f"[\033[32mInfo\033[0m] Using numpy.searchsorted for data extraction.")
 
-        if device == "cuda":
-            import torch
-            freqs_t = torch.as_tensor(self.freqs, device="cuda")
-            f0 = torch.tensor(float(f_start), device="cuda")
-            f1 = torch.tensor(float(f_stop), device="cuda")
-            i0 = int(torch.argmin(torch.abs(freqs_t - f0)).item())
-            i1 = int(torch.argmin(torch.abs(freqs_t - f1)).item())
-            path_used = "torch.cuda"
+        def nearest_index(freqs, f, idx):
+            # 边界保护
+            if idx == 0:
+                return 0
+            elif idx == len(freqs):
+                return len(freqs) - 1
+            # 检查左右哪个更近（相等时取左边，保持与 argmin 一致）
+            left, right = freqs[idx - 1], freqs[idx]
+            if abs(f - left) <= abs(f - right):
+                return idx - 1
+            return idx
+
+        if self.is_monotonic_inc:
+            i0 = nearest_index(self.freqs, f_start, np.searchsorted(self.freqs, f_start, side="left"))
+            i1 = nearest_index(self.freqs, f_stop, np.searchsorted(self.freqs, f_stop, side="left"))
+            path_used = "numpy.searchsorted (ascending + nearest)"
+        elif self.is_monotonic_dec:
+            rev_freqs = self.freqs[::-1]
+            j0 = nearest_index(rev_freqs, f_start, np.searchsorted(rev_freqs, f_start, side="left"))
+            j1 = nearest_index(rev_freqs, f_stop, np.searchsorted(rev_freqs, f_stop, side="left"))
+            n = len(self.freqs)
+            i0, i1 = n - 1 - j0, n - 1 - j1
+            path_used = "numpy.searchsorted (descending + nearest)"
         else:
-            i0 = int(np.argmin(np.abs(self.freqs - f_start)))
-            i1 = int(np.argmin(np.abs(self.freqs - f_stop)))
-            path_used = "numpy"
+            if str(device).startswith("cuda"):
+                freqs_t = torch.as_tensor(self.freqs, device=device, dtype=torch.float64)
+                f0 = torch.tensor(float(f_start), device=device, dtype=torch.float64)
+                f1 = torch.tensor(float(f_stop), device=device, dtype=torch.float64)
+                i0 = int(torch.argmin(torch.abs(freqs_t - f0)).item())
+                i1 = int(torch.argmin(torch.abs(freqs_t - f1)).item())
+                path_used = f"torch.{device}"
+            else:
+                i0 = int(np.argmin(np.abs(self.freqs - f_start)))
+                i1 = int(np.argmin(np.abs(self.freqs - f_stop)))
+                path_used = "numpy.argmin"
+
         if verbose:
             print(f"Step 5 - Frequency indexing ({path_used}): {time.time() - start:.3f} seconds")
 
