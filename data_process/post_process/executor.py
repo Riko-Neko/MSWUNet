@@ -1,6 +1,11 @@
-# Preset standard column headers for TurboSETI and ML dat files
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from data_process.post_process.ML import load_ML_dat
 from data_process.post_process.T_SETI import load_seti_dat
+
+# Preset standard column headers for TurboSETI and ML dat files
 
 SETI_COLUMNS = [
     "Top_Hit_#", "Drift_Rate", "SNR",
@@ -30,13 +35,15 @@ import pandas as pd
 SNR_tolerance = None
 Drift_tolerance = None
 
+
 def analyze_dataframe(df_ml, df_seti, outdir="analysis_out", overlap_ratio_threshold=0.0):
+    outdir = os.path.join(outdir, f"{datetime.now().strftime("%Y%m%d_%H%M%S")}")
     os.makedirs(outdir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     df_ml = df_ml.rename(columns={"DriftRate": "Drift_Rate"})
 
     results = {}
 
+    print("[\033[32mInfo\033[0m] Processing common matches...")
     # ---------- 1. 精确频率区间匹配 ----------
     # Cross-merge to find potential overlaps based on frequency ranges
     df_seti['key'] = 1
@@ -49,7 +56,7 @@ def analyze_dataframe(df_ml, df_seti, outdir="analysis_out", overlap_ratio_thres
     overlapping = cross[
         (cross["freq_start_seti"] <= cross["freq_end_ml"]) &
         (cross["freq_end_seti"] >= cross["freq_start_ml"])
-    ]
+        ]
 
     # Calculate overlap ratio
     overlapping['overlap_start'] = overlapping[['freq_start_seti', 'freq_start_ml']].max(axis=1)
@@ -92,8 +99,8 @@ def analyze_dataframe(df_ml, df_seti, outdir="analysis_out", overlap_ratio_thres
         columns={col + '_ml': col for col in df_ml.columns if col in df_seti.columns}
     ).drop_duplicates()
 
-    fully_matched_seti.to_csv(f"{outdir}/common_exact_seti_{timestamp}.csv", index=False)
-    fully_matched_ml.to_csv(f"{outdir}/common_exact_ml_{timestamp}.csv", index=False)
+    fully_matched_seti.to_csv(f"{outdir}/common_exact_seti.csv", index=False)
+    fully_matched_ml.to_csv(f"{outdir}/common_exact_ml.csv", index=False)
     results["common_exact"] = len(fully_matched_seti)
 
     # Low confidence: frequency overlap but SNR or Drift mismatch
@@ -109,23 +116,25 @@ def analyze_dataframe(df_ml, df_seti, outdir="analysis_out", overlap_ratio_thres
         columns={col + '_ml': col for col in df_ml.columns if col in df_seti.columns}
     ).drop_duplicates()
 
-    low_confidence_seti.to_csv(f"{outdir}/low_confidence_seti_{timestamp}.csv", index=False)
-    low_confidence_ml.to_csv(f"{outdir}/low_confidence_ml_{timestamp}.csv", index=False)
+    low_confidence_seti.to_csv(f"{outdir}/low_confidence_seti.csv", index=False)
+    low_confidence_ml.to_csv(f"{outdir}/low_confidence_ml.csv", index=False)
     results["low_confidence"] = len(low_confidence_seti)
 
+    print("[\033[32mInfo\033[0m] Processing independent matches...")
     # ---------- 2. 各自独立信号 ----------
     # ML 独有 (not in frequency matches meeting threshold)
     ml_only_mask = ~df_ml["Uncorrected_Frequency"].isin(common_exact["Uncorrected_Frequency_ml"])
     ml_only = df_ml[ml_only_mask]
-    ml_only.to_csv(f"{outdir}/ml_only_{timestamp}.csv", index=False)
+    ml_only.to_csv(f"{outdir}/ml_only.csv", index=False)
     results["ml_only"] = len(ml_only)
 
     # SETI 独有
     seti_only_mask = ~df_seti["Uncorrected_Frequency"].isin(common_exact["Uncorrected_Frequency_seti"])
     seti_only = df_seti[seti_only_mask]
-    seti_only.to_csv(f"{outdir}/seti_only_{timestamp}.csv", index=False)
+    seti_only.to_csv(f"{outdir}/seti_only.csv", index=False)
     results["seti_only"] = len(seti_only)
 
+    print("[\033[32mInfo\033[0m] Processing patch matches...")
     # ---------- 3. Patch 尺度匹配 ----------
     overlaps = []
     for _, row_s in df_seti.iterrows():
@@ -147,19 +156,21 @@ def analyze_dataframe(df_ml, df_seti, outdir="analysis_out", overlap_ratio_thres
 
     patch_overlap = pd.DataFrame(overlaps)
     # Deduplicate ML results by cell_row and cell_col
-    patch_overlap_ml_dedup = patch_overlap.drop_duplicates(subset=["ml_freq_min", "ml_freq_max", "cell_row", "cell_col"])
+    patch_overlap_ml_dedup = patch_overlap.drop_duplicates(
+        subset=["ml_freq_min", "ml_freq_max", "cell_row", "cell_col"])
     # Deduplicate SETI by frequency range
     patch_overlap_seti_dedup = patch_overlap.drop_duplicates(subset=["seti_freq_start", "seti_freq_end"])
 
-    patch_overlap_seti_dedup.to_csv(f"{outdir}/patch_overlap_seti_{timestamp}.csv", index=False)
-    patch_overlap_ml_dedup.to_csv(f"{outdir}/patch_overlap_ml_{timestamp}.csv", index=False)
+    patch_overlap_seti_dedup.to_csv(f"{outdir}/patch_overlap_seti.csv", index=False)
+    patch_overlap_ml_dedup.to_csv(f"{outdir}/patch_overlap_ml.csv", index=False)
 
     # Unique count after dedup
     unique_count = len(patch_overlap_seti_dedup)  # Based on unique SETI intervals
     results["patch_overlap"] = unique_count
 
+    print("[\033[32mInfo\033[0m] Calculating statistics...")
     # ---------- 4. 统计信息 ----------
-    with open(f"{outdir}/stats_{timestamp}.txt", "w") as f:
+    with open(f"{outdir}/stats.txt", "w") as f:
         f.write("=== Dataset Statistics ===\n")
         f.write(f"ML total: {len(df_ml)}\n")
         f.write(f"SETI total: {len(df_seti)}\n\n")
@@ -167,13 +178,14 @@ def analyze_dataframe(df_ml, df_seti, outdir="analysis_out", overlap_ratio_thres
         for k, v in results.items():
             f.write(f"{k}: {v}\n")
 
+    print(f"[\033[32mInfo\033[0m] Visualizing results...")
     # ---------- 5. 可视化 ----------
     plt.figure()
     df_ml["SNR"].hist(alpha=0.5, label="ML")
     df_seti["SNR"].hist(alpha=0.5, label="SETI")
     plt.legend()
     plt.title("SNR Distribution")
-    plt.savefig(f"{outdir}/snr_hist_{timestamp}.png")
+    plt.savefig(f"{outdir}/snr_hist.png")
 
     plt.figure()
     plt.scatter(df_ml["Uncorrected_Frequency"], df_ml["SNR"], alpha=0.5, label="ML")
@@ -182,7 +194,7 @@ def analyze_dataframe(df_ml, df_seti, outdir="analysis_out", overlap_ratio_thres
     plt.title("Frequency vs SNR")
     plt.xlabel("Frequency")
     plt.ylabel("SNR")
-    plt.savefig(f"{outdir}/freq_snr_scatter_{timestamp}.png")
+    plt.savefig(f"{outdir}/freq_snr_scatter.png")
 
     return results
 
@@ -213,10 +225,13 @@ def summarize_dataframe(df: pd.DataFrame):
 
 
 if __name__ == "__main__":
-    # mlf = '../../pipeline/log/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002/hits_20250818_181041.dat'
     setif = '../test_out/truboseti_blis692ns/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.dat'
-    mlf = '../../pipeline/log/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0/hits_20250819_135738.dat'
     # setif = '../test_out/truboseti_blis692ns/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.dat'
+
+    # mlf = '../../pipeline/log/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002/hits_20250818_181041.dat'
+    # mlf = '../../pipeline/log/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0/hits_20250819_135738.dat'
+    mlf = '../../pipeline/log/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000/hits_20250823_030007.dat'
+
     df_ml = load_ML_dat(mlf)
     # df_ml = load_ML_csv(mlf)
     df_seti = load_seti_dat(setif)
