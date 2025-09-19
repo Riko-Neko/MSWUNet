@@ -6,9 +6,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from external.Waterfall import Waterfall
-
 # from blimpy import Waterfall
+from external.Waterfall import Waterfall
 
 system = platform.system()
 if system == 'Windows':
@@ -74,7 +73,11 @@ class SETIWaterFullDataset(Dataset):
 
         # Load data
         # print("[\033[33mDebug\033[0m] Grabbing data...")
-        patch_freqs, data = self.obs.grab_data(f_start, f_stop, start_t, end_t, device=self.device)
+        try:
+            patch_freqs, data = self.obs.grab_data(f_start, f_stop, start_t, end_t, device=self.device)
+        except TypeError as e:
+            print(f"[\033[31mError\033[0m] Got unexpected parameter: {e}")
+            patch_freqs, data = self.obs.grab_data(f_start, f_stop, start_t, end_t)
 
         # Normalize
         # print("[\033[33mDebug\033[0m] Normalizing data...")

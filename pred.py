@@ -34,19 +34,20 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
     # Common file path for observation data
     # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
     # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
-    obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil"
+    # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil"
+    obs_file_path = "./data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil"
     file_stem = Path(obs_file_path).stem
 
     # Default simulated dataset
-    tchans = 16
+    tchans = 116
     fchans = 1024
     df = 7.5
-    dt = 18.0
+    dt = 10.0
     drift_min = -4.0
     drift_max = 4.0
     drift_min_abs = df // (tchans * dt)
-    patch_t = 16
-    patch_f = 4096
+    patch_t = 116
+    patch_f = 1024
 
     # Create datasets based on mode and obs flag
     if obs and mode != "pipeline":
@@ -101,31 +102,65 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
             print("[\033[32mInfo\033[0m] Running UNet inference...")
             pred(unet, mode='dbl', data=batch, idx=idx, save_dir=pred_dir, device=device, save_npy=False, plot=True)
 
+
     elif mode == "pipeline":
         print("[\033[32mInfo\033[0m] Running pipeline processing mode")
-        # Create dataset (always uses observation data)
-        dataset = SETIWaterFullDataset(
-            file_path=obs_file_path,
-            patch_t=patch_t,
-            patch_f=patch_f,
-            overlap_pct=0.02,
-            device=device
-        )
-        # Load model
-        model = load_model(DWTNet, dwtnet_ckpt, in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4')
-        if ui:
-            # Create and show the renderer
-            app = QApplication(sys.argv)
-            renderer = SETIWaterfallRenderer(dataset, model, device, log_dir=file_stem, drift=drift,
-                                             snr_threshold=snr_threshold, min_abs_drift=drift_min_abs, verbose=verbose)
-            renderer.setWindowTitle("SETI Waterfall Data Processor")
-            renderer.show()
-            sys.exit(app.exec_())
+        obs_path = Path(obs_file_path)
+        if obs_path.is_dir():
+            file_list = sorted([f for f in obs_path.iterdir() if f.suffix in [".fil", ".h5"]])
+            if not file_list:
+                print(f"[\033[31mError\033[0m] No .fil or .h5 files found in directory: {obs_path}")
+            for idx, f in enumerate(file_list):
+                print(f"[\033[34mFile\033[0m] Processing file: {f}")
+                dataset = SETIWaterFullDataset(file_path=str(f),
+                                               patch_t=patch_t,
+                                               patch_f=patch_f,
+                                               overlap_pct=0.02,
+                                               device=device)
+
+                # Load model
+                model = load_model(DWTNet, dwtnet_ckpt, in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4')
+                if ui:
+                    app = QApplication(sys.argv)
+                    renderer = SETIWaterfallRenderer(dataset, model, device, log_dir=f.stem, drift=drift,
+                                                     snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
+                                                     verbose=verbose)
+                    renderer.setWindowTitle(f"SETI Waterfall Data Processor - {f.name}")
+                    renderer.show()
+                    if idx == len(file_list) - 1:
+                        sys.exit(app.exec_())
+                    else:
+                        app.exec_()
+                else:
+                    print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
+                    processor = SETIPipelineProcessor(dataset, model, device, log_dir=f.stem, drift=drift,
+                                                      snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
+                                                      verbose=verbose)
+                    processor.process_all_patches()
+
         else:
-            print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
-            processor = SETIPipelineProcessor(dataset, model, device, log_dir=file_stem, drift=drift,
-                                              snr_threshold=snr_threshold, min_abs_drift=drift_min_abs, verbose=verbose)
-            processor.process_all_patches()
+            dataset = SETIWaterFullDataset(file_path=obs_file_path,
+                                           patch_t=patch_t,
+                                           patch_f=patch_f,
+                                           overlap_pct=0.02,
+                                           device=device)
+
+            model = load_model(DWTNet, dwtnet_ckpt, in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4')
+
+            if ui:
+                app = QApplication(sys.argv)
+                renderer = SETIWaterfallRenderer(dataset, model, device, log_dir=file_stem, drift=drift,
+                                                 snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
+                                                 verbose=verbose)
+                renderer.setWindowTitle("SETI Waterfall Data Processor")
+                renderer.show()
+                sys.exit(app.exec_())
+            else:
+                print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
+                processor = SETIPipelineProcessor(dataset, model, device, log_dir=file_stem, drift=drift,
+                                                  snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
+                                                  verbose=verbose)
+                processor.process_all_patches()
 
     else:
         print("[\033[32mInfo\033[0m] Running single-model mode")
