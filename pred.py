@@ -39,10 +39,10 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
     file_stem = Path(obs_file_path).stem
 
     # Default simulated dataset
-    tchans = 116
+    tchans = 128
     fchans = 1024
-    df = 7.5
-    dt = 10.0
+    df = 7.450580597
+    dt = 10.200547328
     drift_min = -4.0
     drift_max = 4.0
     drift_min_abs = df // (tchans * dt)
@@ -62,7 +62,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
         pred_dataloader = DataLoader(dataset, batch_size=1, num_workers=0, pin_memory=True)
     else:
 
-        pred_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
+        pred_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=True,
                                               drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.05,
                                               snr_min=20.0, snr_max=30.0, width_min=10, width_max=30,
                                               num_signals=(0, 1), noise_std_min=0.025, noise_std_max=0.05,

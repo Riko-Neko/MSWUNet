@@ -15,7 +15,7 @@ from gen.FRIgen import add_rfi
 
 
 def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, signals=None, noise_x_mean=0.0,
-                          noise_x_std=1.0, mode='test', noise_type='normal', rfi_params=None, seed=None, plot=False,
+                          noise_x_std=1.0, noise_type='normal', rfi_params=None, seed=None, plot=False,
                           plot_filename=None, background_fil=None):
     """
         使用 SetiGen 库合成动态频谱并注入射频干扰（RFI）。
@@ -93,7 +93,6 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             clean_spec (numpy.ndarray): 纯净动态频谱（不含RFI和噪声），形状为(tchans, fchans)
             noisy_spec (numpy.ndarray): 含RFI和噪声的动态频谱，形状为(tchans, fchans)
             rfi_mask (numpy.ndarray): RFI位置布尔掩码，形状为(tchans, fchans)
-            (N, f_starts, f_stops): 目标检测参数，N为信号数量，f_starts为信号起始频率列表，f_stops为信号终止频率列表
 
         示例信号配置:
             signals = [
@@ -113,9 +112,6 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
                 }
             ]
     """
-    if mode not in ['detection', 'mask', 'test']:
-        raise ValueError('mode must be detection, mask or test')
-
     # 固定随机种子
     if seed is not None:
         np.random.seed(seed)
@@ -126,6 +122,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
         dt = dt * u.s
     if fch1 is None:
         fch1 = 1.42e9 * u.Hz  # 默认 1420 MHz
+        ascending = False
     elif not isinstance(fch1, u.Quantity):
         fch1 = fch1 * u.Hz
 
@@ -151,8 +148,6 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             frame.add_noise(x_mean=noise_x_mean, noise_type='chi2')
 
     # 注入信号
-    f_starts = []
-    f_stops = []
     if signals:
         for sig in signals:
             # 计算起始频率
@@ -181,7 +176,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             if path_type == 'constant':
                 path = stg.constant_path(f_start=f_start, drift_rate=drift)
             elif path_type == 'sine':
-                period = sig.get('period', tchans * dt.value / 2) * u.s
+                period = sig.get('period', tchans / 2) * u.s
                 amplitude = sig.get('amplitude', 0.0) * u.Hz
                 path = stg.sine_path(f_start=f_start, drift_rate=drift, period=period, amplitude=amplitude)
             elif path_type == 'squared':
@@ -200,17 +195,17 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             if t_type == 'constant':
                 t_profile = stg.constant_t_profile(level=level)
             elif t_type == 'sine':
-                s_period = sig.get('s_period', tchans * dt.value / 2) * u.s
-                s_amplitude = sig.get('s_amplitude_factor', 1.0) * level
-                t_profile = stg.sine_t_profile(period=s_period, amplitude=s_amplitude, level=level)
+                t_period = sig.get('t_period', tchans / 2) * u.s
+                t_amplitude = sig.get('t_amplitude', level)
+                t_profile = stg.sine_t_profile(period=t_period, amplitude=t_amplitude, level=level)
             elif t_type == 'pulse':
-                pulse_width = sig.get('p_width', tchans * dt.value / 10)
-                p_period = sig.get('p_period', tchans * dt.value / 5)
-                p_amplitude = sig.get('p_amplitude_factor', 1.0) * level
-                p_num = sig.get('p_num', 3)
-                p_min_level = sig.get('p_min_level_factor', 0.0) * level
-                t_profile = stg.periodic_gaussian_t_profile(pulse_width=pulse_width, period=p_period, pnum=p_num,
-                                                            amplitude=p_amplitude, level=level, min_level=p_min_level)
+                pulse_width = sig.get('pulse_width', tchans / 10)
+                p_period = sig.get('t_period', tchans / 5)
+                p_amplitude = sig.get('t_amplitude', 1.0)
+                pnum = sig.get('pnum', 3)
+                min_level = sig.get('min_level', 0.0)
+                t_profile = stg.periodic_gaussian_t_profile(pulse_width=pulse_width, period=p_period,
+                                                            amplitude=p_amplitude, level=level, min_level=min_level)
             else:
                 t_profile = stg.constant_t_profile(level=level)
             # 频谱轮廓
@@ -232,19 +227,8 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             bp_profile = stg.constant_bp_profile(level=1.0)
             clean_spec += frame.add_signal(path, t_profile, f_profile, bp_profile)
 
-            # 计算起始和终止频率索引
-            f_start_val = frame.get_index(path(frame.ts[0]))
-            f_stop_val = frame.get_index(path(frame.ts[tchans - 1]))
-            f_starts.append(f_start_val)
-            f_stops.append(f_stop_val)
-
-    signal_spec = frame.get_data(db=False).copy()
-
     # 初始化 RFI 掩码
-    if mode == 'mask' or mode == 'test':
-        rfi_mask = np.zeros_like(frame.data, dtype=bool)
-    else:
-        rfi_mask = None
+    rfi_mask = np.zeros_like(frame.data, dtype=bool)
 
     # 添加低漂移率 RFI（使用 setigen，constant 类型）
     if rfi_params and not use_fil:
@@ -253,88 +237,88 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             f_start = frame.get_frequency(f_index)
             drift_rate = np.random.uniform(-0.0001, 0.0001) * u.Hz / u.s
             path = stg.constant_path(f_start=f_start, drift_rate=drift_rate)
-            rlevel = rfi_params.get('LowDrift_amp', 1.0) * noise_x_std
+            level = rfi_params.get('LowDrift_amp', 5.0) * noise_x_std
             # 默认 constant 调制
-            t_profile = stg.constant_t_profile(level=rlevel)
+            t_profile = stg.constant_t_profile(level=level)
             # 以 0.3 概率应用时间调制
             if np.random.rand() < 0.3:
                 if np.random.rand() < 0.5:  # 一半概率 sine
-                    t_period = tchans * dt.value / 2 * np.random.uniform(1.0, 1.5) * u.s
-                    t_amplitude = rlevel
-                    t_profile = stg.sine_t_profile(period=t_period, amplitude=t_amplitude, level=rlevel)
+                    t_period = tchans / 2 * np.random.uniform(0.1, 1.5) * u.s
+                    t_amplitude = level
+                    t_profile = stg.sine_t_profile(period=t_period, amplitude=t_amplitude, level=level)
                 else:  # 一半概率 pulse
-                    pulse_width = tchans * dt.value / 2 * np.random.uniform(1.0, 1.5)
-                    p_period = tchans * dt.value / 2 * np.random.uniform(1.0, 1.5)
+                    pulse_width = tchans / 10 * np.random.uniform(0.1, 1.5)
+                    p_period = tchans / 5 * np.random.uniform(0.1, 1.5)
                     p_amplitude = 1.0 * np.random.uniform(0.1, 1.5)
                     min_level = 0.0
                     t_profile = stg.periodic_gaussian_t_profile(pulse_width=pulse_width, period=p_period,
-                                                                amplitude=p_amplitude, level=rlevel,
-                                                                min_level=min_level)
+                                                                amplitude=p_amplitude, level=level, min_level=min_level)
             # 频率与带宽 profile
             width = rfi_params.get('LowDrift_width', 2.0) * u.Hz
-            f_profile = stg.gaussian_f_profile(width=np.random.uniform(1, 3) * width)
+            f_profile = stg.gaussian_f_profile(width=width)
             bp_profile = stg.constant_bp_profile(1.0)
             added_signal = frame.add_signal(path, t_profile, f_profile, bp_profile)
-            if mode == 'mask' or mode == 'test':
-                rfi_mask |= (added_signal > 0.1 * rlevel)
+            rfi_mask |= (added_signal > 0.1 * level)
+
+        # 添加负噪声带（负高斯轮廓）
+        for _ in range(rfi_params.get('NegBand', 0)):
+            f_index = np.random.randint(0, fchans)
+            f_start = frame.get_frequency(f_index)
+            drift_rate = 0 * u.Hz / u.s
+            path = stg.constant_path(f_start=f_start, drift_rate=drift_rate)
+            amp = rfi_params.get('NegBand_amp', 1)
+            level = -amp * noise_x_std
+            t_profile = stg.constant_t_profile(level=level)
+            width_hz = rfi_params.get('NegBand_width', 0.5e3)
+            width = min(width_hz, fchans * df.to(u.Hz).value / 2) * u.Hz  # 限制不超过总带宽的一半
+            f_profile = stg.gaussian_f_profile(width=width)
+            bp_profile = stg.constant_bp_profile(1.0)
+            added_signal = frame.add_signal(path, t_profile, f_profile, bp_profile)
+
+    signal_spec = frame.get_data(db=False)
 
     # 注入传统 RFI
     if rfi_params and np.random.random() < 0.5 and not use_fil:
-        noisy_spec, traditional_rfi_mask = add_rfi(frame.get_data(db=False).copy(), rfi_params, noise_x_std * 0.25)
-        if mode == 'mask' or mode == 'test':
-            rfi_mask |= traditional_rfi_mask
+        noisy_spec, traditional_rfi_mask = add_rfi(signal_spec, rfi_params)
+        rfi_mask |= traditional_rfi_mask
     else:
-        noisy_spec = frame.get_data(db=False)
+        noisy_spec = signal_spec.copy()
 
     # 可视化（可选）
     if plot:
-        plt.figure(figsize=(24, 12))
+        plt.figure(figsize=(36, 36))
         if ascending:
             freqs = fch1.to(u.Hz).value + np.arange(fchans) * df.to(u.Hz).value
         else:
             freqs = fch1.to(u.Hz).value - np.arange(fchans) * df.to(u.Hz).value
-
         plt.subplot(221)
-        plt.imshow(clean_spec, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
-        for f_start_val, f_stop_val in zip(f_starts, f_stops):
-            plt.axvline(frame.get_frequency(f_start_val), color='red', linestyle='--', linewidth=0.5)
-            plt.axvline(frame.get_frequency(f_stop_val), color='red', linestyle='--', linewidth=0.5)
+        plt.imshow(clean_spec, aspect='auto', origin='lower',
+                   extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
         plt.title('Clean Signal Spectrum')
         plt.colorbar(label='Intensity')
-
         plt.subplot(222)
-        plt.imshow(signal_spec, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
-        plt.title('Signal Spectrum with Background Noise')
+        plt.imshow(signal_spec, aspect='auto', origin='lower',
+                   extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
+        plt.title('Signal Spectrum with Noise')
         plt.colorbar(label='Intensity')
-
         plt.subplot(223)
-        plt.imshow(noisy_spec, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
-        for f_start, f_stop in zip(f_starts, f_stops):
-            plt.axvline(frame.get_frequency(f_start), color='red', linestyle='--', linewidth=0.5)
-            plt.axvline(frame.get_frequency(f_stop), color='red', linestyle='--', linewidth=0.5)
-        plt.title('Noisy Spectrum with injected RFI')
+        plt.imshow(noisy_spec, aspect='auto', origin='lower',
+                   extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
+        plt.title('Noisy Spectrum with RFI')
         plt.colorbar(label='Intensity')
-
         plt.subplot(224)
-        if rfi_mask is None:
-            rfi_mask = np.zeros_like(frame.data, dtype=bool)
-        plt.imshow(rfi_mask, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans], cmap='Reds')
+        plt.imshow(rfi_mask, aspect='auto', origin='lower',
+                   extent=[freqs[0], freqs[-1], 0, tchans], cmap='Reds')
         plt.title('RFI Mask')
         plt.xlabel('Frequency (Hz)')
         plt.ylabel('Time')
         plt.colorbar(label='RFI presence')
         plt.tight_layout()
-
         if plot_filename:
             out_path = Path(plot_filename)
             plt.savefig(out_path, dpi=480)
             print(f"Plot saved to {out_path}")
-    if mode == 'detection':
-        return signal_spec, clean_spec, noisy_spec, (len(f_starts), f_starts, f_stops)
-    elif mode == 'mask':
-        return signal_spec, clean_spec, noisy_spec, rfi_mask
-    else:
-        return signal_spec, clean_spec, noisy_spec, rfi_mask, (len(f_starts), f_starts, f_stops)
+    return signal_spec, clean_spec, noisy_spec, rfi_mask
 
 
 if __name__ == "__main__":
@@ -344,7 +328,7 @@ if __name__ == "__main__":
     os.makedirs(out_dir, exist_ok=True)
 
     signals = [{
-        'f_index': 512,
+        'f_index': 1024,
         'drift_rate': 0.1,  # Hz/s
         'snr': 10,
         'width': 20,  # Hz
@@ -354,8 +338,8 @@ if __name__ == "__main__":
         't_profile': 'constant',
         'f_profile': 'gaussian'
     }, {
-        'f_index': 128,
-        'drift_rate': -4,  # Hz/s
+        'f_index': 2048,
+        'drift_rate': -1,  # Hz/s
         'snr': 10,
         'width': 20,  # Hz
         'path': 'sine',
@@ -364,8 +348,8 @@ if __name__ == "__main__":
         't_profile': 'constant',
         'f_profile': 'gaussian'
     }, {
-        'f_index': 768,
-        'drift_rate': 4,  # Hz/s
+        'f_index': 3072,
+        'drift_rate': 2,  # Hz/s
         'snr': 10,
         'width': 20,  # Hz
         'path': 'constant',
@@ -385,12 +369,15 @@ if __name__ == "__main__":
         'BBT_amp': np.random.uniform(1, 5),
         'LowDrift': np.random.randint(1, 6),
         'LowDrift_amp': np.random.uniform(1.25, 5),
-        'LowDrift_width': np.random.uniform(7.5, 15)
+        'LowDrift_width': np.random.uniform(7.5, 15),
+        'NegBand': np.random.randint(1, 2),
+        'NegBand_amp': np.random.uniform(0.25, 0.75),
+        'NegBand_width': np.random.uniform(0.3e6, 0.7e6)
     }
 
     sim_dynamic_spec_seti(
         fchans=1024,
-        tchans=116,
+        tchans=144,
         df=7.5,
         dt=1.0,
         fch1=1.42e9,
@@ -398,7 +385,6 @@ if __name__ == "__main__":
         signals=signals,
         noise_x_mean=0.0,
         noise_x_std=0.1,
-        mode='test',
         noise_type='normal',
         rfi_params=rfi_conf,
         seed=42,

@@ -351,7 +351,7 @@ if __name__ == "__main__":
     drift_max = 4.0
     # drift_min_abs = df // (tchans * dt)
     drift_min_abs = 0.0
-    dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
+    dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=True,
                                      drift_min=drift_min, drift_max=drift_max, drift_min_abs=drift_min_abs,
                                      snr_min=50.0, snr_max=60.0, width_min=10, width_max=15, num_signals=(1, 1),
                                      noise_std_min=0.025, noise_std_max=0.05)

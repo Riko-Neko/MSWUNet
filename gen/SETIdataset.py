@@ -2,6 +2,7 @@ import os
 import random
 
 import numpy as np
+import torch
 from matplotlib import pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 
@@ -9,23 +10,38 @@ from gen.SETIgen import sim_dynamic_spec_seti
 
 
 class DynamicSpectrumDataset(Dataset):
-    def __init__(self,
-                 tchans=224, fchans=224, df=1.0, dt=1.0, fch1=None, ascending=False, drift_min=-2.0, drift_max=2.0,
-                 drift_min_abs=0.2, snr_min=10.0, snr_max=30.0, width_min=1.0, width_max=5.0, num_signals=(0, 1),
-                 noise_std_min=0.05, noise_std_max=0.2, use_fil=False, background_fil=None):
+    def __init__(self, mode='test', tchans=224, fchans=224, df=1.0, dt=1.0, fch1=None, ascending=True, drift_min=-2.0,
+                 drift_max=2.0, drift_min_abs=0.2, snr_min=10.0, snr_max=30.0, width_min=1.0, width_max=5.0,
+                 num_signals=(0, 1), noise_std_min=0.05, noise_std_max=0.2, noise_mean_min=0.0, noise_mean_max=0.05,
+                 noise_type='normal', use_fil=False, background_fil=None):
         """
         动态生成式数据集构造函数，参数动态适应频率和时间通道数。
 
-        参数:
-            tchans, fchans, df, dt, fch1, ascending: 与动态频谱函数对应的频谱尺寸参数
-            drift_min, drift_max: 漂移率范围 (Hz/s)
-            drift_min_abs: 最小绝对漂移率 (Hz/s)，确保信号漂移率绝对值不低于此值
-            snr_min, snr_max: 信噪比范围
-            width_min, width_max: 频谱宽度范围 (Hz)
-            num_signals: 信号个数范围 (min, max)
-            noise_std_min, noise_std_max: 噪声标准差范围
-            background_fil: fil文件路径，用于背景噪声
+        Args:
+            mode: 模式，'train' 或 'test'
+            tchans: 时间通道数
+            fchans: 频率通道数
+            df: 频率分辨率
+            dt: 时间分辨率
+            fch1: 起始频率，默认 1.42 GHz
+            ascending: 升序还是降序
+            drift_min: 最小漂移率
+            drift_max: 最大漂移率
+            drift_min_abs: 最小漂移率绝对值
+            snr_min: 最小信噪比
+            snr_max: 最大信噪比
+            width_min: 最小宽度
+            width_max: 最大宽度
+            num_signals: 信号数量范围，元组 (min, max)
+            noise_std_min: 噪声标准差最小值
+            noise_std_max: 噪声标准差最大值
+            noise_mean_min: 噪声均值最小值
+            noise_mean_max: 噪声均值最大值
+            noise_type: Distribution to use for synthetic noise, {"chi2", "gaussian", "normal"}, default: "chi2"
+            use_fil: Weather to use FILTERBANK file as background noise
+            background_fil: Path to background noise file
         """
+        self.mode = mode
         self.tchans = tchans
         self.fchans = fchans
         self.df = df
@@ -40,8 +56,12 @@ class DynamicSpectrumDataset(Dataset):
         self.width_min = width_min
         self.width_max = width_max
         self.num_signals = num_signals
+        self.max_num_signals = num_signals[1] + 1
         self.noise_std_min = noise_std_min
         self.noise_std_max = noise_std_max
+        self.noise_mean_min = noise_mean_min
+        self.noise_mean_max = noise_mean_max
+        self.noise_type = noise_type
         self.background_fil = None if not use_fil else background_fil
 
         # 动态计算总带宽和总时间
@@ -54,28 +74,33 @@ class DynamicSpectrumDataset(Dataset):
     def __getitem__(self, idx):
         # 随机生成信号列表
         n_signals = random.randint(self.num_signals[0], self.num_signals[1])
-        if np.random.random() < 0.01:
+        if np.random.random() < 0.05:
             n_signals += 1  # 1% 的概率增加一个SETI信号
 
         if np.random.random() < 0.1:  # 10% 的概率不生成任何信号
             n_signals = 0
 
         # 生成判据
-        if n_signals == 0:
-            phy_prob = 0.
+        if self.mode == 'test' or self.mode == 'mask':
+            if n_signals == 0:
+                phy_prob = 0.
+            else:
+                phy_prob = 1.
         else:
-            phy_prob = 1.
+            phy_prob = None
 
         signals = []
         for i in range(n_signals):
             # 随机路径类型
             path_type = random.choices(['constant', 'sine', 'squared', 'rfi'],
-                                       weights=[0.5, 0., 0.5, 0.])[0]
+                                       weights=[0.4, 0.2, 0.4, 0.])[0]
             # 默认信号参数
             margin = int(0.2 * self.fchans)
             # 随机漂移率，确保绝对值不低于 drift_min_abs
             while True:
-                drift_rate = random.uniform(self.drift_min, self.drift_max)
+                # 使用 Beta 分布采样，α=β=3 => 两端概率极低
+                x = random.betavariate(4, 4)
+                drift_rate = self.drift_min + x * (self.drift_max - self.drift_min)
                 if abs(drift_rate) >= self.drift_min_abs:
                     break
             if drift_rate < 0:
@@ -95,7 +120,7 @@ class DynamicSpectrumDataset(Dataset):
                 'width': width,
                 'path': path_type,
                 't_profile': random.choices(
-                    ['pulse', 'sine', 'constant'], weights=[0.25, 0.25, 0.5], k=1)[0],
+                    ['pulse', 'sine', 'constant'], weights=[0.2, 0.4, 0.4], k=1)[0],
                 'f_profile': random.choices(
                     ['gaussian', 'box', 'sinc', 'lorentzian', 'voigt'],
                     weights=[0.3, 0.2, 0.2, 0.15, 0.15],
@@ -111,7 +136,7 @@ class DynamicSpectrumDataset(Dataset):
 
             # 路径类型特定参数
             if path_type == 'sine':
-                sig['period'] = random.uniform(0.1 * self.total_time, self.total_time)
+                sig['period'] = random.uniform(1 * self.total_time, 10 * self.total_time)
                 sig['amplitude'] = random.uniform(-0.1 * self.total_bandwidth, 0.1 * self.total_bandwidth)
             elif path_type == 'rfi':
                 sig['spread'] = random.uniform(0.005 * self.total_bandwidth, 0.05 * self.total_bandwidth)
@@ -121,10 +146,22 @@ class DynamicSpectrumDataset(Dataset):
                 sig['drift_rate'] = random.uniform(0.1 * drift_rate / self.total_bandwidth,
                                                    1 * drift_rate / self.total_bandwidth)
 
+            # 时间调制类型参数
+            if sig['t_profile'] == 'pulse':
+                sig['p_width'] = random.uniform(0.1 * self.total_time, 100 * self.total_time)
+                sig['p_amplitude_factor'] = random.uniform(0.1, 1.0)
+                sig['p_num'] = random.randint(1, 5)
+                sig['p_min_level_factor'] = random.uniform(0.05, 1.0)
+            elif sig['t_profile'] == 'sine':
+                sig['s_period'] = random.uniform(0.5 * self.total_time, 30 * self.total_time)
+                sig['s_amplitude_factor'] = random.uniform(0.01, 1.0)
+
             signals.append(sig)
 
         # 随机噪声标准差
         noise_std = random.uniform(self.noise_std_min, self.noise_std_max)
+        # 随机噪声均值
+        noise_mean = random.uniform(self.noise_mean_min, self.noise_mean_max)
 
         # 随机 RFI 配置
         rfi_params = {
@@ -132,51 +169,80 @@ class DynamicSpectrumDataset(Dataset):
             'NBC_amp': np.random.uniform(0.25, 25),
             'NBT': np.random.randint(1, self.tchans // 16 + 1),
             'NBT_amp': np.random.uniform(0.25, 50),
-            'BBT': np.random.randint(0, self.fchans // 512),
-            'BBT_amp': np.random.uniform(0.5, 25),
-            'LowDrift': np.random.randint(1, 5),
+            'BBT': np.random.randint(1, self.fchans // 256),
+            'BBT_amp': np.random.uniform(0.25, 25),
+            'LowDrift': np.random.randint(1, 10),
             'LowDrift_amp': np.random.uniform(0.1, 25),
-            'LowDrift_width': np.random.uniform(7.5, 15),
-            'NegBand': np.random.randint(0, 2),
-            'NegBand_amp': np.random.uniform(1, 10),
-            'NegBand_width': np.random.uniform(0.3e3, 0.7e3)
+            'LowDrift_width': np.random.uniform(7.5, 15)
         }
 
+        args = dict(fchans=self.fchans,
+                    tchans=self.tchans,
+                    df=self.df,
+                    dt=self.dt,
+                    fch1=self.fch1,
+                    ascending=self.ascending,
+                    signals=signals,
+                    noise_x_mean=noise_mean,
+                    noise_x_std=noise_std,
+                    mode=self.mode,
+                    noise_type=self.noise_type,
+                    rfi_params=rfi_params,
+                    seed=None,
+                    plot=False,
+                    background_fil=self.background_fil)
+
         # 生成动态频谱样本
-        signal_spec, clean_spec, noisy_spec, rfi_mask = sim_dynamic_spec_seti(
-            fchans=self.fchans,
-            tchans=self.tchans,
-            df=self.df,
-            dt=self.dt,
-            fch1=self.fch1,
-            ascending=self.ascending,
-            signals=signals,
-            noise_x_mean=0.,
-            noise_x_std=noise_std,
-            noise_type='normal',
-            rfi_params=rfi_params,
-            seed=None,
-            plot=False,
-            background_fil=self.background_fil
-        )
+        freq_info = None
+        if self.mode == 'detection':
+            signal_spec, clean_spec, noisy_spec, freq_info = sim_dynamic_spec_seti(**args)
+            rfi_mask = None
+        elif self.mode == 'mask':
+            signal_spec, clean_spec, noisy_spec, rfi_mask = sim_dynamic_spec_seti(**args)
+        else:
+            signal_spec, clean_spec, noisy_spec, rfi_mask, freq_info = sim_dynamic_spec_seti(**args)
 
         # 归一化处理
         mean = np.mean(signal_spec)
         std = np.std(signal_spec)
         if std < 1e-10:
             std = 1.0
-        clean_spec = (clean_spec - mean) / std
+
+        clean_mean = np.mean(clean_spec)
+        clean_std = np.std(clean_spec)
+        if clean_std < 1e-10:
+            clean_std = 1.0
+
+        # noisy_mean = np.mean(noisy_spec)
+        # noisy_std = np.std(noisy_spec)
+        # if noisy_std < 1e-10:
+        #     noisy_std = 1.0
+
+        clean_spec = (clean_spec - clean_mean) / clean_std
         noisy_spec = (noisy_spec - mean) / std
 
         # 添加通道维度并转换为 float32
         clean_spec = clean_spec.astype(np.float32)[np.newaxis, :, :]
         noisy_spec = noisy_spec.astype(np.float32)[np.newaxis, :, :]
-        rfi_mask = rfi_mask.astype(np.float32)[np.newaxis, :, :]
+        if self.mode == 'mask' or self.mode == 'test':
+            rfi_mask = rfi_mask.astype(np.float32)[np.newaxis, :, :]
 
-        return noisy_spec, clean_spec, rfi_mask, phy_prob
+        if self.mode == 'detection':
+            N, f_starts, f_stops = freq_info if freq_info else (0, [], [])
+            gt_boxes = torch.full((self.max_num_signals, 2), float('nan'), dtype=torch.float32)
+            if N > 0:
+                starts_norm = torch.tensor(f_starts, dtype=torch.float32) / (self.fchans - 1)
+                stops_norm = torch.tensor(f_stops, dtype=torch.float32) / (self.fchans - 1)
+                gt_boxes[:N, 0] = torch.clamp(starts_norm, 0.0, 1.0)
+                gt_boxes[:N, 1] = torch.clamp(stops_norm, 0.0, 1.0)
+            return noisy_spec, clean_spec, gt_boxes
+        elif self.mode == 'mask':
+            return noisy_spec, clean_spec, rfi_mask, phy_prob
+        else:
+            return noisy_spec, clean_spec, rfi_mask, freq_info, phy_prob
 
 
-def plot_samples(dataset, kind='clean', num=10, out_dir=None):
+def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=False, spectrum_type='mean'):
     """
     Plot and save specific type of spectrograms from a dynamic dataset.
 
@@ -185,8 +251,12 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None):
     - kind: 'clean' | 'noisy' | 'mask'
     - num: number of samples to plot
     - out_dir: output directory to save images (default depends on kind)
+    - with_spectrum: whether to also plot frequency spectrum
+    - spectrum_type: 'mean' | 'middle' | 'peak' | 'fft2d'
     """
     assert kind in ['clean', 'noisy', 'mask'], f"Invalid kind: {kind}"
+    assert dataset.mode == 'test', "Dataset mode must be 'test' for plotting"
+    assert spectrum_type in ['mean', 'middle', 'peak', 'fft2d'], f"Invalid spectrum type: {kind}"
 
     if out_dir is None:
         out_dir = {
@@ -206,40 +276,115 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None):
             break
 
         if isinstance(sample, (list, tuple)):
-            noisy_spec, clean_spec, rfi_mask, _ = sample
+            noisy_spec, clean_spec, rfi_mask, freq_info, _ = sample
         else:
-            raise TypeError("Dataset must return a tuple (clean, noisy, mask)")
+            raise TypeError("Dataset must return a tuple (noisy, clean, mask, freq_info)")
 
         if kind == 'clean':
             spec = clean_spec.squeeze().numpy()
         elif kind == 'noisy':
             spec = noisy_spec.squeeze().numpy()
         elif kind == 'mask':
+            if with_spectrum:
+                print("[\033[33mWarning\033[0m] Cannot plot frequency spectrum with mask, ignoring.")
+                with_spectrum = False
             spec = rfi_mask.squeeze().float().numpy()
 
-        plt.figure(figsize=(15, 3))
-        plt.imshow(spec, aspect='auto', origin='lower', cmap='viridis')
-        plt.title(f"{kind} spectrogram #{i}")
-        plt.colorbar()
+        # 计算频率轴
+        fch1 = dataset.fch1
+        df = dataset.df
+        fchans = dataset.fchans
+        if dataset.ascending:
+            freqs = fch1 + np.arange(fchans) * df
+        else:
+            freqs = fch1 - np.arange(fchans) * df
+
+        if with_spectrum:
+            fig, axs = plt.subplots(2, 1, figsize=(15, 6), sharex=True)
+
+            if spectrum_type == "fft2d":
+                # 原始动态频谱
+                im0 = axs[0].imshow(spec, aspect='auto', origin='lower', cmap='viridis',
+                                    extent=[freqs[0], freqs[-1], 0, dataset.tchans])
+                axs[0].set_title(f"{kind} spectrogram #{i}")
+                fig.colorbar(im0, ax=axs[0])
+
+                if kind in ['noisy', 'clean']:
+                    N, f_starts, f_stops = freq_info
+                    for f_start, f_stop in zip(f_starts, f_stops):
+                        axs[0].axvline(freqs[f_start], color='red', linestyle='--', linewidth=0.5)
+                        axs[0].axvline(freqs[f_stop], color='red', linestyle='--', linewidth=0.5)
+
+                # 2D FFT 幅度谱
+                fft2d = np.fft.fftshift(np.fft.fft2(spec))
+                fft_mag = np.log1p(np.abs(fft2d))  # log 缩放便于可视化
+
+                im1 = axs[1].imshow(fft_mag, aspect='auto', origin='lower', cmap='inferno')
+                axs[1].set_title("2D FFT magnitude spectrum")
+                fig.colorbar(im1, ax=axs[1])
+
+            else:
+                # 原始动态频谱
+                axs[0].imshow(spec, aspect='auto', origin='lower', cmap='viridis',
+                              extent=[freqs[0], freqs[-1], 0, dataset.tchans])
+                axs[0].set_title(f"{kind} spectrogram #{i}")
+
+                if kind in ['noisy', 'clean']:
+                    N, f_starts, f_stops = freq_info
+                    for f_start, f_stop in zip(f_starts, f_stops):
+                        axs[0].axvline(freqs[f_start], color='red', linestyle='--', linewidth=0.5)
+                        axs[0].axvline(freqs[f_stop], color='red', linestyle='--', linewidth=0.5)
+
+                # 1D 频谱
+                if spectrum_type == "mean":
+                    spectrum = spec.mean(axis=0)
+                elif spectrum_type == "middle":
+                    T = dataset.tchans // 2
+                    spectrum = spec[T, :]
+                elif spectrum_type == "peak":
+                    spectrum = spec.max(axis=0)
+                else:
+                    raise ValueError(f"Invalid spectrum_type: {spectrum_type}")
+
+                axs[1].plot(freqs, spectrum, color='blue')
+                axs[1].set_xlabel("Frequency")
+                axs[1].set_ylabel("Power")
+                axs[1].set_title(f"Spectrum ({spectrum_type})")
+
+        else:
+            # 只画动态频谱
+            plt.figure(figsize=(15, 3))
+            plt.imshow(spec, aspect='auto', origin='lower', cmap='viridis',
+                       extent=[freqs[0], freqs[-1], 0, dataset.tchans])
+            plt.title(f"{kind} spectrogram #{i}")
+            plt.colorbar()
+
+            if kind in ['noisy', 'clean']:
+                N, f_starts, f_stops = freq_info
+                for f_start, f_stop in zip(f_starts, f_stops):
+                    plt.axvline(freqs[f_start], color='red', linestyle='--', linewidth=0.5)
+                    plt.axvline(freqs[f_stop], color='red', linestyle='--', linewidth=0.5)
+
         plt.tight_layout()
-        plt.savefig(os.path.join(out_dir, f"{kind}_{i:03d}.png"))
-        print(f"Saved to {os.path.join(out_dir, f"{kind}_{i:03d}.png")}")
+        save_path = os.path.join(out_dir, f"{kind}_{i:03d}.png")
+        plt.savefig(save_path)
+        print(f"Saved to {save_path}")
         plt.close()
 
 
 if __name__ == "__main__":
-    tchans = 144
+    tchans = 116
     fchans = 1024
-    df = 7.5
-    dt = 1.0
+    df = 7.450580597
+    dt = 10.200547328
     drift_min = -4.0
     drift_max = 4.0
     drift_min_abs = df // (tchans * dt)
-    dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=False,
-                                     drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.2,
-                                     snr_min=10.0, snr_max=20.0, width_min=10, width_max=15, num_signals=(1, 1),
-                                     noise_std_min=0.025, noise_std_max=0.05,
-                                     background_fil="../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil")
+    dataset = DynamicSpectrumDataset(mode='test', tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=True,
+                                     drift_min=drift_min, drift_max=drift_max, drift_min_abs=drift_min_abs,
+                                     snr_min=15.0, snr_max=25.0, width_min=10, width_max=30, num_signals=(1, 1),
+                                     noise_std_min=0.025, noise_std_max=0.05, noise_mean_min=2, noise_mean_max=3,
+                                     noise_type='chi2', use_fil=False, background_fil="")
 
     """
     参数生成 Refs:
@@ -254,6 +399,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    plot_samples(dataset, kind='clean', num=30)
-    plot_samples(dataset, kind='noisy', num=30)
-    plot_samples(dataset, kind='mask', num=30)
+    # plot_samples(dataset, kind='clean', num=30, with_spectrum=True, spectrum_type='mean')
+    plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='mean')
+    # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)

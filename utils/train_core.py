@@ -9,9 +9,10 @@ from tqdm import tqdm
 
 
 # Training function with validation, best model saving, checkpoint loading, and force_save_best switch
-def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer, scheduler, device, num_epochs=100,
-                steps_per_epoch=1000, valid_interval=1, valid_steps=50, checkpoint_dir='./checkpoints', log_interval=50,
-                resume_from=None, use_best_weights=False, force_save_best=False):
+def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer, scheduler, device, mode='detection',
+                num_epochs=100, steps_per_epoch=1000, valid_interval=1, valid_steps=50, checkpoint_dir='./checkpoints',
+                log_interval=50, det_level_weights=None, resume_from=None, use_best_weights=False,
+                force_save_best=False):
     # Create checkpoint directory
     os.makedirs(checkpoint_dir, exist_ok=True)
 
@@ -27,8 +28,12 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
     else:
         # Otherwise, create new step log with header
         with open(step_log_file, 'w') as f:
-            f.write(
-                "epoch,global_step,total_loss,spectrum_loss,ssim_loss,rfi_loss,detection_loss,alpha,beta,gamma,delta\n")
+            if mode == 'mask':
+                f.write(
+                    "epoch,global_step,total_loss,spectrum_loss,ssim_loss,rfi_loss,detection_loss,alpha,beta,gamma,delta\n")
+            elif mode == 'detection':
+                f.write(
+                    "epoch,global_step,total_loss,detection_loss,denoise_loss,det_loss_reg,det_loss_conf,det_n_pos,lambda_denoise\n")
 
     if resume_from and os.path.exists(epoch_log_file):
         # Load existing epoch log
@@ -59,8 +64,12 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             model.load_state_dict(checkpoint['model_state_dict'], strict=False)
             print(f"[\033[32mInfo\033[0m] Loaded model state from {resume_from}")
         start_epoch = checkpoint['epoch'] + 1  # Start from the next epoch
-        criterion.step = checkpoint['criterion_step']
-        criterion.mse_moving_avg = checkpoint['mse_moving_avg']
+
+        # Load criterion state for mask mode
+        if mode == 'mask':
+            criterion.step = checkpoint['criterion_step']
+            criterion.mse_moving_avg = checkpoint['mse_moving_avg']
+
         print(f"[\033[32mInfo\033[0m] Resumed at epoch {start_epoch}")
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -86,22 +95,52 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
         for step in range(steps_per_epoch):
             try:
-                noisy, clean, mask, pprob = next(iter(train_dataloader))
+                if mode == 'mask':
+                    noisy, clean, mask, pprob = next(iter(train_dataloader))
+                elif mode == 'detection':
+                    noisy, clean, gt_boxes = next(iter(train_dataloader))
             except StopIteration:
                 train_dataloader = iter(train_dataloader)
-                noisy, clean, mask, pprob = next(train_dataloader)
+                if mode == 'mask':
+                    noisy, clean, mask, pprob = next(train_dataloader)
+                elif mode == 'detection':
+                    noisy, clean, gt_boxes = next(train_dataloader)
 
             noisy = noisy.to(device)
             clean = clean.to(device)
-            mask = mask.to(device)
-            pprob = pprob.to(device)
+
+            if mode == 'mask':
+                mask = mask.to(device)
+                pprob = pprob.to(device)
+            elif mode == 'detection':
+                gt_boxes = gt_boxes.to(device)
 
             # Forward pass
-            denoised, rfi_mask, plogits = model(noisy)
+            if mode == 'mask':
+                denoised, rfi_mask, plogits = model(noisy)
+            elif mode == 'detection':
+                raw_preds, denoised = model(noisy)
 
             # Calculate loss
-            total_loss, spectrum_loss, ssim_loss, rfi_loss, detection_loss, current_alpha, current_beta, current_gamma, current_delta = criterion(
-                denoised, rfi_mask, plogits, clean, mask, pprob)
+            if mode == 'mask':
+                total_loss, metrics = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
+                spectrum_loss = metrics["spectrum_loss"]
+                ssim_loss = metrics["ssim_loss"]
+                rfi_loss = metrics["rfi_loss"]
+                pdet_loss = metrics["detection_loss"]
+                current_alpha = metrics["alpha"]
+                current_beta = metrics["beta"]
+                current_gamma = metrics["gamma"]
+                current_delta = metrics["delta"]
+            elif mode == 'detection':
+                total_loss, metrics = criterion(raw_preds=raw_preds, denoised=denoised, clean=clean, gt_boxes=gt_boxes)
+                detection_loss = metrics["detection_loss"]
+                denoise_loss = metrics["denoise_loss"]
+                det_loss_reg = metrics["det_loss_reg"]
+                det_loss_conf = metrics["det_loss_conf"]
+                det_n_pos = metrics["det_n_pos"]
+                lambda_denoise = metrics["lambda_denoise"]
+
             epoch_losses.append(total_loss.item())
 
             # Backpropagation and optimization
@@ -110,25 +149,42 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             optimizer.step()
 
             # Update progress bar
-            train_progress.set_postfix({
-                'loss': total_loss.item(),
-                'spec': spectrum_loss.item(),
-                'ssim': ssim_loss.item(),
-                'rfi': rfi_loss.item(),
-                'det': detection_loss.item(),
-                'α': current_alpha,
-                'β': current_beta,
-                'γ': current_gamma,
-                'δ': current_delta
-            })
+            if mode == 'mask':
+                train_progress.set_postfix({
+                    'loss': total_loss.item(),
+                    'spec': spectrum_loss.item(),
+                    'ssim': ssim_loss.item(),
+                    'rfi': rfi_loss.item(),
+                    'det': pdet_loss.item(),
+                    'α': current_alpha,
+                    'β': current_beta,
+                    'γ': current_gamma,
+                    'δ': current_delta
+                })
+            elif mode == 'detection':
+                train_progress.set_postfix({
+                    'loss': total_loss.item(),
+                    'denoise': denoise_loss.item(),
+                    'det': detection_loss.item(),
+                    'reg': det_loss_reg,
+                    'conf': det_loss_conf,
+                    'n_pos': det_n_pos,
+                    'λ': lambda_denoise.item() if hasattr(lambda_denoise, 'item') else lambda_denoise
+                })
             train_progress.update(1)
 
             # Log step data
             if step % log_interval == 0:
                 with open(step_log_file, 'a') as f:
-                    f.write(f"{epoch},{criterion.step},{total_loss.item():.6f},"
-                            f"{spectrum_loss.item():.6f},{ssim_loss.item():.6f},{rfi_loss.item():.6f},{detection_loss.item():.6f},"
-                            f"{current_alpha:.4f},{current_beta:.4f},{current_gamma:.4f},{current_delta:.4f}\n")
+                    if mode == 'mask':
+                        f.write(f"{epoch},{criterion.step},{total_loss.item():.6f},"
+                                f"{spectrum_loss.item():.6f},{ssim_loss.item():.6f},{rfi_loss.item():.6f},{pdet_loss.item():.6f},"
+                                f"{current_alpha:.4f},{current_beta:.4f},{current_gamma:.4f},{current_delta:.4f}\n")
+                    elif mode == 'detection':
+                        f.write(f"{epoch},{step},{total_loss.item():.6f},"
+                                f"{detection_loss.item():.6f},{denoise_loss.item():.6f},"
+                                f"{det_loss_reg:.6f},{det_loss_conf:.6f},{det_n_pos},"
+                                f"{lambda_denoise.item() if hasattr(lambda_denoise, 'item') else lambda_denoise:.6f}\n")
 
         train_progress.close()
         avg_train_loss = np.mean(epoch_losses)
@@ -142,19 +198,34 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
             for i in range(valid_steps):
                 try:
-                    noisy, clean, mask, pprob = next(iter(valid_dataloader))
+                    if mode == 'mask':
+                        noisy, clean, mask, pprob = next(iter(valid_dataloader))
+                    elif mode == 'detection':
+                        noisy, clean, gt_boxes = next(iter(valid_dataloader))
                 except StopIteration:
                     valid_dataloader = iter(valid_dataloader)
-                    noisy, clean, mask, pprob = next(valid_dataloader)
+                    if mode == 'mask':
+                        noisy, clean, mask, pprob = next(valid_dataloader)
+                    elif mode == 'detection':
+                        noisy, clean, gt_boxes = next(valid_dataloader)
 
                 noisy = noisy.to(device)
                 clean = clean.to(device)
-                mask = mask.to(device)
-                pprob = pprob.to(device)
+
+                if mode == 'mask':
+                    mask = mask.to(device)
+                    pprob = pprob.to(device)
+                elif mode == 'detection':
+                    gt_boxes = gt_boxes.to(device)
 
                 with torch.no_grad():
-                    denoised, rfi_mask, plogits = model(noisy)
-                    total_loss, _, _, _, _, _, _, _, _ = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
+                    if mode == 'mask':
+                        denoised, rfi_mask, plogits = model(noisy)
+                        total_loss, metrics = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
+                    elif mode == 'detection':
+                        raw_preds, denoised = model(noisy)
+                        total_loss, metrics = criterion(raw_preds, denoised, clean, gt_boxes, det_level_weights)
+
                     valid_losses.append(total_loss.item())
 
                 valid_progress.set_postfix({'loss': total_loss.item()})
@@ -173,14 +244,19 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                     best_valid_loss = valid_loss
                     best_epoch = epoch + 1
                     best_model_path = Path(checkpoint_dir) / "best_model.pth"
-                    torch.save({
+                    save_dict = {
                         'epoch': epoch,
                         'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'loss': valid_loss,
-                        'criterion_step': criterion.step,
-                        'mse_moving_avg': criterion.mse_moving_avg,
-                    }, best_model_path)
+                    }
+
+                    # Add mode-specific items
+                    if mode == 'mask':
+                        save_dict['criterion_step'] = criterion.step
+                        save_dict['mse_moving_avg'] = criterion.mse_moving_avg
+
+                    torch.save(save_dict, best_model_path)
                     print(
                         f"\033[32mSaved best model (epoch {best_epoch}) with validation loss: {best_valid_loss:.6f}\033[0m")
                 else:
@@ -199,14 +275,19 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
         # Save checkpoint
         checkpoint_path = Path(checkpoint_dir) / f"model_epoch_{epoch + 1}.pth"
-        torch.save({
+        save_dict = {
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'loss': avg_train_loss,
-            'criterion_step': criterion.step,
-            'mse_moving_avg': criterion.mse_moving_avg,
-        }, checkpoint_path)
+        }
+
+        # Add mode-specific items
+        if mode == 'mask':
+            save_dict['criterion_step'] = criterion.step
+            save_dict['mse_moving_avg'] = criterion.mse_moving_avg
+
+        torch.save(save_dict, checkpoint_path)
         print(f"Saved checkpoint to {checkpoint_path}")
 
         # Remove old checkpoints (keep last 3)
