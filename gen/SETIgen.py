@@ -6,6 +6,8 @@ import numpy as np
 import setigen as stg
 from astropy import units as u
 
+from utils.det_utils import plot_F_lines
+
 try:
     matplotlib.use('MacOSX')
 except:
@@ -233,10 +235,10 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             clean_spec += frame.add_signal(path, t_profile, f_profile, bp_profile)
 
             # 计算起始和终止频率索引
-            f_start_val = frame.get_index(path(frame.ts[0]))
-            f_stop_val = frame.get_index(path(frame.ts[tchans - 1]))
-            f_starts.append(f_start_val)
-            f_stops.append(f_stop_val)
+            f_start = frame.get_index(path(frame.ts[0]))
+            f_stop = frame.get_index(path(frame.ts[tchans - 1]))
+            f_starts.append(f_start)
+            f_stops.append(f_stop)
 
     signal_spec = frame.get_data(db=False).copy()
 
@@ -295,10 +297,9 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             freqs = fch1.to(u.Hz).value - np.arange(fchans) * df.to(u.Hz).value
 
         plt.subplot(221)
-        plt.imshow(clean_spec, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
-        for f_start_val, f_stop_val in zip(f_starts, f_stops):
-            plt.axvline(frame.get_frequency(f_start_val), color='red', linestyle='--', linewidth=0.5)
-            plt.axvline(frame.get_frequency(f_stop_val), color='red', linestyle='--', linewidth=0.5)
+        plt.imshow(clean_spec, aspect='auto', origin='lower',
+                   extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
+        plot_F_lines(plt.gca(), freqs, (len(f_starts), f_starts, f_stops), normalized=False)
         plt.title('Clean Signal Spectrum')
         plt.colorbar(label='Intensity')
 
@@ -309,9 +310,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
 
         plt.subplot(223)
         plt.imshow(noisy_spec, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
-        for f_start, f_stop in zip(f_starts, f_stops):
-            plt.axvline(frame.get_frequency(f_start), color='red', linestyle='--', linewidth=0.5)
-            plt.axvline(frame.get_frequency(f_stop), color='red', linestyle='--', linewidth=0.5)
+        plot_F_lines(plt.gca(), freqs, (len(f_starts), f_starts, f_stops), normalized=False)
         plt.title('Noisy Spectrum with injected RFI')
         plt.colorbar(label='Intensity')
 

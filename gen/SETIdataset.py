@@ -7,6 +7,7 @@ from matplotlib import pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 
 from gen.SETIgen import sim_dynamic_spec_seti
+from utils.det_utils import plot_F_lines
 
 
 class DynamicSpectrumDataset(Dataset):
@@ -310,10 +311,7 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=Fals
                 fig.colorbar(im0, ax=axs[0])
 
                 if kind in ['noisy', 'clean']:
-                    N, f_starts, f_stops = freq_info
-                    for f_start, f_stop in zip(f_starts, f_stops):
-                        axs[0].axvline(freqs[f_start], color='red', linestyle='--', linewidth=0.5)
-                        axs[0].axvline(freqs[f_stop], color='red', linestyle='--', linewidth=0.5)
+                    plot_F_lines(axs[0], freqs, freq_info, normalized=False)
 
                 # 2D FFT 幅度谱
                 fft2d = np.fft.fftshift(np.fft.fft2(spec))
@@ -330,10 +328,7 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=Fals
                 axs[0].set_title(f"{kind} spectrogram #{i}")
 
                 if kind in ['noisy', 'clean']:
-                    N, f_starts, f_stops = freq_info
-                    for f_start, f_stop in zip(f_starts, f_stops):
-                        axs[0].axvline(freqs[f_start], color='red', linestyle='--', linewidth=0.5)
-                        axs[0].axvline(freqs[f_stop], color='red', linestyle='--', linewidth=0.5)
+                    plot_F_lines(axs[0], freqs, freq_info, normalized=False)
 
                 # 1D 频谱
                 if spectrum_type == "mean":
@@ -352,18 +347,14 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=Fals
                 axs[1].set_title(f"Spectrum ({spectrum_type})")
 
         else:
-            # 只画动态频谱
-            plt.figure(figsize=(15, 3))
-            plt.imshow(spec, aspect='auto', origin='lower', cmap='viridis',
-                       extent=[freqs[0], freqs[-1], 0, dataset.tchans])
-            plt.title(f"{kind} spectrogram #{i}")
-            plt.colorbar()
+            fig, ax = plt.subplots(figsize=(15, 3))
+            im = ax.imshow(spec, aspect='auto', origin='lower', cmap='viridis',
+                           extent=[freqs[0], freqs[-1], 0, dataset.tchans])
+            ax.set_title(f"{kind} spectrogram #{i}")
+            fig.colorbar(im, ax=ax)
 
             if kind in ['noisy', 'clean']:
-                N, f_starts, f_stops = freq_info
-                for f_start, f_stop in zip(f_starts, f_stops):
-                    plt.axvline(freqs[f_start], color='red', linestyle='--', linewidth=0.5)
-                    plt.axvline(freqs[f_stop], color='red', linestyle='--', linewidth=0.5)
+                plot_F_lines(ax, freqs, freq_info, normalized=False)
 
         plt.tight_layout()
         save_path = os.path.join(out_dir, f"{kind}_{i:03d}.png")
@@ -399,6 +390,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    # plot_samples(dataset, kind='clean', num=30, with_spectrum=True, spectrum_type='mean')
-    plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='mean')
+    plot_samples(dataset, kind='clean', num=10, with_spectrum=False, spectrum_type='mean')
+    # plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='mean')
     # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)

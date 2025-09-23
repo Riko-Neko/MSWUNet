@@ -78,6 +78,19 @@ force_save_best = True
 # checkpoint_dir = "./checkpoints/unet"
 checkpoint_dir = "./checkpoints/dwtnet"
 det_level_weights = None
+P = 2
+
+# Model config
+dwtnet_args = dict(
+    in_chans=1,
+    dim=64,
+    levels=[2, 4, 8, 16],
+    wavelet_name='db4',
+    extension_mode='periodization',
+    P=P,
+    use_spp=True,
+    use_pan=True)
+unet_args = dict()
 
 
 # Main function
@@ -123,14 +136,14 @@ def main():
     valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
 
     # Initialize model (assuming DWTNet outputs two tensors)
-    model = DWTNet(in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4', extension_mode='periodization')
-    # model = UNet()
+    model = DWTNet(**dwtnet_args)
+    # model = UNet(**unet_args)
 
     summary(model, input_size=(1, 1, 128, 1024))
 
     # Loss function and optimizer
     # criterion = MaskCombinedLoss(device, alpha=1.0, beta=0., gamma=0., delta=0., momentum=0.99, fixed_g_d=True)
-    criterion = DetectionCombinedLoss(P=2, lambda_denoise=10, loss_type='mse', avg_time=True, lambda_learnable=False,
+    criterion = DetectionCombinedLoss(P=P, lambda_denoise=1, loss_type='mse', avg_time=False, lambda_learnable=False,
                                       device=device, detection_loss_kwargs={'lambda_coord': 5.0,
                                                                             'noobj_weight': 0.5,
                                                                             'temporal_agg': 'soft',
@@ -141,7 +154,7 @@ def main():
 
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True,
     #                                                  min_lr=1e-9)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30, eta_min=1.0e-18)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30, eta_min=1.0e-11)
 
     # Check for latest checkpoint to resume from
     checkpoint_files = list(Path(checkpoint_dir).glob("model_epoch_*.pth"))

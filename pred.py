@@ -15,6 +15,61 @@ from pipeline.pipeline_processor import SETIPipelineProcessor
 from pipeline.renderer import SETIWaterfallRenderer
 from utils.pred_core import pred
 
+# Prediction modes
+pmode = "detection"
+# mode = "mask"
+
+# Data config
+patch_t = 116
+patch_f = 1024
+overlap_pct = 0.02
+tchans = 116
+fchans = 1024
+df = 7.450580597
+dt = 10.200547328
+fch1 = None
+ascending = True
+drift_min = -4.0
+drift_max = 4.0
+drift_min_abs = df // (tchans * dt)
+snr_min = 15.0
+snr_max = 25.0
+width_min = 10
+width_max = 30
+num_signals = (1, 1)
+noise_std_min = 0.025
+noise_std_max = 0.05
+noise_mean_min = 2
+noise_mean_max = 3
+nosie_type = "chi2"
+use_fil = False
+background_fil = ""
+
+# Prediction config
+batch_size = 1
+num_workers = 0
+pred_dir = "./pred_results"
+pred_steps = 100
+dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
+unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
+P = 2
+
+# hits conf info
+drift = [-4.0, 4.0]
+snr_threshold = 20.0
+
+# Model config
+dwtnet_args = dict(
+    in_chans=1,
+    dim=64,
+    levels=[2, 4, 8, 16],
+    wavelet_name='db4',
+    extension_mode='periodization',
+    P=P,
+    use_spp=True,
+    use_pan=True)
+unet_args = dict()
+
 
 def main(mode=None, ui=False, obs=False, verbose=False, *args):
     # Set random seeds
@@ -38,36 +93,23 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
     obs_file_path = "./data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil"
     file_stem = Path(obs_file_path).stem
 
-    # Default simulated dataset
-    tchans = 128
-    fchans = 1024
-    df = 7.450580597
-    dt = 10.200547328
-    drift_min = -4.0
-    drift_max = 4.0
-    drift_min_abs = df // (tchans * dt)
-    patch_t = 116
-    patch_f = 1024
-
     # Create datasets based on mode and obs flag
     if obs and mode != "pipeline":
         # Use pipeline dataset for obs mode
         print("[\033[32mInfo\033[0m] Using observation data from:", obs_file_path)
-        dataset = SETIWaterFullDataset(
-            file_path=obs_file_path,
-            patch_t=patch_t,
-            patch_f=patch_f,
-            overlap_pct=0.02
-        )
-        pred_dataloader = DataLoader(dataset, batch_size=1, num_workers=0, pin_memory=True)
+        dataset = SETIWaterFullDataset(file_path=obs_file_path, patch_t=patch_t, patch_f=patch_f,
+                                       overlap_pct=overlap_pct)
+        pred_dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
     else:
 
-        pred_dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=True,
-                                              drift_min=drift_min, drift_max=drift_max, drift_min_abs=0.05,
-                                              snr_min=20.0, snr_max=30.0, width_min=10, width_max=30,
-                                              num_signals=(0, 1), noise_std_min=0.025, noise_std_max=0.05,
-                                              use_fil=False, background_fil=obs_file_path)
-        pred_dataloader = DataLoader(pred_dataset, batch_size=1, num_workers=1, pin_memory=True)
+        pred_dataset = DynamicSpectrumDataset(mode=pmode, tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=fch1,
+                                              ascending=ascending, drift_min=drift_min, drift_max=drift_max,
+                                              drift_min_abs=drift_min_abs, snr_min=snr_min, snr_max=snr_max,
+                                              width_min=width_min, width_max=width_max, num_signals=num_signals,
+                                              noise_std_min=noise_std_min, noise_std_max=noise_std_max,
+                                              noise_mean_min=noise_mean_min, noise_mean_max=noise_mean_max,
+                                              noise_type=nosie_type, use_fil=use_fil, background_fil=background_fil)
+        pred_dataloader = DataLoader(pred_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
 
     def load_model(model_class, checkpoint_path, **kwargs):
         model = model_class(**kwargs).to(device)
@@ -76,21 +118,12 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
         model.eval()
         return model
 
-    # Prediction configuration
-    pred_dir = "./pred_results"
-    pred_steps = 100
-    dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
-    unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
-
-    # hits conf info
-    drift = [-4.0, 4.0]
-    snr_threshold = 20.0
-
     if mode == "dbl":
+        global pred_dir
         pred_dir = Path(pred_dir) / "dbl"
         print("[\033[32mInfo\033[0m] Running dual-model comparison mode")
         # Load both models
-        dwtnet = load_model(DWTNet, dwtnet_ckpt, in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4')
+        dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
         unet = load_model(UNet, unet_ckpt)
         # Process the same samples with both models
         for idx, batch in enumerate(pred_dataloader):
@@ -98,9 +131,11 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
                 break
             print(f"[\033[32mInfo\033[0m] Processing sample {idx + 1}/{pred_steps}")
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
-            pred(dwtnet, mode='dbl', data=batch, idx=idx, save_dir=pred_dir, device=device, save_npy=False, plot=True)
+            pred(dwtnet, data_mode='dbl', mode=pmode, data=batch, idx=idx, save_dir=pred_dir, device=device,
+                 save_npy=False, plot=True)
             print("[\033[32mInfo\033[0m] Running UNet inference...")
-            pred(unet, mode='dbl', data=batch, idx=idx, save_dir=pred_dir, device=device, save_npy=False, plot=True)
+            pred(unet, data_mode='dbl', mode=pmode, data=batch, idx=idx, save_dir=pred_dir, device=device,
+                 save_npy=False, plot=True)
 
 
     elif mode == "pipeline":
@@ -112,14 +147,11 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
                 print(f"[\033[31mError\033[0m] No .fil or .h5 files found in directory: {obs_path}")
             for idx, f in enumerate(file_list):
                 print(f"[\033[34mFile\033[0m] Processing file: {f}")
-                dataset = SETIWaterFullDataset(file_path=str(f),
-                                               patch_t=patch_t,
-                                               patch_f=patch_f,
-                                               overlap_pct=0.02,
-                                               device=device)
+                dataset = SETIWaterFullDataset(file_path=str(f), patch_t=patch_t, patch_f=patch_f,
+                                               overlap_pct=overlap_pct, device=device)
 
                 # Load model
-                model = load_model(DWTNet, dwtnet_ckpt, in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4')
+                model = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
                 if ui:
                     app = QApplication(sys.argv)
                     renderer = SETIWaterfallRenderer(dataset, model, device, log_dir=f.stem, drift=drift,
@@ -139,13 +171,9 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
                     processor.process_all_patches()
 
         else:
-            dataset = SETIWaterFullDataset(file_path=obs_file_path,
-                                           patch_t=patch_t,
-                                           patch_f=patch_f,
-                                           overlap_pct=0.02,
-                                           device=device)
-
-            model = load_model(DWTNet, dwtnet_ckpt, in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4')
+            dataset = SETIWaterFullDataset(file_path=obs_file_path, patch_t=patch_t, patch_f=patch_f,
+                                           overlap_pct=overlap_pct, device=device)
+            model = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
 
             if ui:
                 app = QApplication(sys.argv)
@@ -168,15 +196,15 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
         # --- 推理 DWTNet ---
         if execute0:
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
-            dwtnet = load_model(DWTNet, dwtnet_ckpt, in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4')
-            pred(dwtnet, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps, save_npy=False,
-                 plot=True)
+            dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
+            pred(dwtnet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
+                 save_npy=False, plot=True)
         # --- 推理 UNet ---
         if execute1:
             print("[\033[32mInfo\033[0m] Running UNet inference...")
-            unet = load_model(UNet, unet_ckpt)
-            pred(unet, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps, save_npy=False,
-                 plot=True)
+            unet = load_model(UNet, unet_ckpt, **unet_args)
+            pred(unet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
+                 save_npy=False, plot=True)
 
 
 if __name__ == "__main__":

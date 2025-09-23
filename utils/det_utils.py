@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 
 
@@ -88,3 +89,28 @@ def nms_1d(det_out, iou_thresh=0.5, top_k=None):
         results.append(keep)
 
     return results
+
+
+def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color='red', linestyle='--', linewidth=0.5):
+    """
+    Plot detected frequency intervals as vertical lines on a 1D frequency plot.
+
+    Args:
+        ax (matplotlib.axes.Axes): The axis to plot on.
+        freqs (array-like): Array of frequency values.
+        pred_boxes (tuple): (N, f_starts, f_stops)
+            - N: number of intervals
+            - f_starts: list/array of start indices (or normalized [0,1] values)
+            - f_stops: list/array of stop indices (or normalized [0,1] values)
+        normalized (bool): Whether the boxes are normalized to [0, 1].
+        color (str): Color of the lines.
+        linestyle (str): Line style.
+        linewidth (float): Line width.
+    """
+    N, f_starts, f_stops = pred_boxes
+    if normalized:
+        f_starts = np.rint(f_starts * (len(freqs) - 1)).astype(int)
+        f_stops = np.rint(f_stops * (len(freqs) - 1)).astype(int)
+    for f_start, f_stop in zip(f_starts, f_stops):
+        ax.axvline(freqs[f_start], color=color, linestyle=linestyle, linewidth=linewidth)
+        ax.axvline(freqs[f_stop], color=color, linestyle=linestyle, linewidth=linewidth)

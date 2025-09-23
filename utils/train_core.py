@@ -119,7 +119,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             if mode == 'mask':
                 denoised, rfi_mask, plogits = model(noisy)
             elif mode == 'detection':
-                raw_preds, denoised = model(noisy)
+                denoised, raw_preds = model(noisy)
 
             # Calculate loss
             if mode == 'mask':
@@ -164,8 +164,8 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             elif mode == 'detection':
                 train_progress.set_postfix({
                     'loss': total_loss.item(),
-                    'denoise': denoise_loss.item(),
-                    'det': detection_loss.item(),
+                    'deno': denoise_loss,
+                    'det': detection_loss,
                     'reg': det_loss_reg,
                     'conf': det_loss_conf,
                     'n_pos': det_n_pos,
@@ -182,8 +182,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                                 f"{current_alpha:.4f},{current_beta:.4f},{current_gamma:.4f},{current_delta:.4f}\n")
                     elif mode == 'detection':
                         f.write(f"{epoch},{step},{total_loss.item():.6f},"
-                                f"{detection_loss.item():.6f},{denoise_loss.item():.6f},"
-                                f"{det_loss_reg:.6f},{det_loss_conf:.6f},{det_n_pos},"
+                                f"{detection_loss:.6f},{denoise_loss:.6f},"f"{det_loss_reg:.6f},{det_loss_conf:.6f},{det_n_pos},"
                                 f"{lambda_denoise.item() if hasattr(lambda_denoise, 'item') else lambda_denoise:.6f}\n")
 
         train_progress.close()
@@ -223,7 +222,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                         denoised, rfi_mask, plogits = model(noisy)
                         total_loss, metrics = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
                     elif mode == 'detection':
-                        raw_preds, denoised = model(noisy)
+                        denoised, raw_preds = model(noisy)
                         total_loss, metrics = criterion(raw_preds, denoised, clean, gt_boxes, det_level_weights)
 
                     valid_losses.append(total_loss.item())
