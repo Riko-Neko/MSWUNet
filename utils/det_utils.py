@@ -108,9 +108,43 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color='red', linestyle=
         linewidth (float): Line width.
     """
     N, f_starts, f_stops = pred_boxes
+    if N == 0:
+        return
+
+    def to_numpy(x):
+        if isinstance(x, list):
+            x = torch.cat([t.flatten() for t in x]) if len(x) > 0 else torch.tensor([])
+            return x.cpu().numpy()
+        elif torch.is_tensor(x):
+            return x.cpu().numpy()
+        else:
+            return np.asarray(x)
+
+    f_starts = to_numpy(f_starts)
+    f_stops = to_numpy(f_stops)
+
+    valid_mask = (np.isfinite(f_starts) & np.isfinite(f_stops))
+    if normalized:
+        valid_mask &= ((f_starts >= 0) & (f_starts <= 1) &
+                       (f_stops >= 0) & (f_stops <= 1))
+    else:
+        valid_mask &= ((f_starts >= 0) & (f_starts < len(freqs)) &
+                       (f_stops >= 0) & (f_stops < len(freqs)))
+
+    f_starts = f_starts[valid_mask]
+    f_stops = f_stops[valid_mask]
+    N_valid = len(f_starts)
+    if N_valid == 0:
+        print(f"[\033[33mWarn\033[0m] No valid boxes after filtering in plot_F_lines")
+        return
+
     if normalized:
         f_starts = np.rint(f_starts * (len(freqs) - 1)).astype(int)
         f_stops = np.rint(f_stops * (len(freqs) - 1)).astype(int)
+    else:
+        f_starts = f_starts.astype(int)
+        f_stops = f_stops.astype(int)
+
     for f_start, f_stop in zip(f_starts, f_stops):
         ax.axvline(freqs[f_start], color=color, linestyle=linestyle, linewidth=linewidth)
         ax.axvline(freqs[f_stop], color=color, linestyle=linestyle, linewidth=linewidth)

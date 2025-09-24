@@ -95,10 +95,13 @@ unet_args = dict()
 
 # Main function
 def main():
-    parser = argparse.ArgumentParser(description="Select CUDA device")
-    parser.add_argument('-d', '--device', type=int, default=0,
+    parser = argparse.ArgumentParser(description="Select additional options for training")
+    parser.add_argument('-d', '--device',
+                        type=int,
+                        default=0,
                         help='CUDA device ID, default is 0')
-    parser.add_argument('-l', '--load', action='store_true',
+    parser.add_argument('-l', '--load',
+                        action='store_true',
                         help='Load best weights instead of checkpoint weights')
     args = parser.parse_args()
     cuda_id = args.device

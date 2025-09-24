@@ -75,7 +75,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             print("[\033[32mInfo\033[0m] Optimizer state loaded.")
         except Exception as e:
-            print(f"[\033[33mWarning\033[0m]: failed to load optimizer state: {e}")
+            print(f"[\033[33mWarn\033[0m]: failed to load optimizer state: {e}")
         if force_save_best:
             print("[\033[32mInfo\033[0m] Forcing best model save with reset validation loss.")
             best_valid_loss = float('inf')  # Reset best validation loss when resuming with force_save_best

@@ -3,6 +3,7 @@ import random
 
 import numpy as np
 import torch
+from blimpy import Waterfall
 from matplotlib import pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 
@@ -63,8 +64,8 @@ class DynamicSpectrumDataset(Dataset):
         self.noise_mean_min = noise_mean_min
         self.noise_mean_max = noise_mean_max
         self.noise_type = noise_type
-        self.background_fil = None if not use_fil else background_fil
-
+        self.waterfall_itr = None if not use_fil else split_waterfall_generator(background_fil, fchans, tchans=tchans,
+                                                                                f_shift=[fchans // 4, fchans])
         # 动态计算总带宽和总时间
         self.total_bandwidth = self.fchans * self.df
         self.total_time = self.tchans * self.dt
@@ -167,13 +168,13 @@ class DynamicSpectrumDataset(Dataset):
         # 随机 RFI 配置
         rfi_params = {
             'NBC': np.random.randint(1, self.fchans // 128),
-            'NBC_amp': np.random.uniform(0.25, 25),
+            'NBC_amp': np.random.uniform(1, 25),
             'NBT': np.random.randint(1, self.tchans // 16 + 1),
-            'NBT_amp': np.random.uniform(0.25, 50),
+            'NBT_amp': np.random.uniform(1, 50),
             'BBT': np.random.randint(1, self.fchans // 256),
-            'BBT_amp': np.random.uniform(0.25, 25),
+            'BBT_amp': np.random.uniform(1, 25),
             'LowDrift': np.random.randint(1, 10),
-            'LowDrift_amp': np.random.uniform(0.1, 25),
+            'LowDrift_amp_factor': np.random.uniform(0.1, 1.0),
             'LowDrift_width': np.random.uniform(7.5, 15)
         }
 
@@ -191,7 +192,7 @@ class DynamicSpectrumDataset(Dataset):
                     rfi_params=rfi_params,
                     seed=None,
                     plot=False,
-                    background_fil=self.background_fil)
+                    waterfall_itr=self.waterfall_itr)
 
         # 生成动态频谱样本
         freq_info = None
@@ -243,6 +244,62 @@ class DynamicSpectrumDataset(Dataset):
             return noisy_spec, clean_spec, rfi_mask, freq_info, phy_prob
 
 
+def split_waterfall_generator(waterfall_fn, fchans, tchans=None, f_shift=None):
+    """
+    Generator that yields smaller Waterfall objects split by frequency.
+
+    Parameters
+    ----------
+    waterfall_fn : str or list of str
+        Single filterbank filename or list of filenames.
+    fchans : int
+        Number of frequency channels per split.
+    tchans : int, optional
+        Number of time samples to keep (default = all).
+    f_shift : int or (int,int), optional
+        If int -> fixed shift. If tuple/list -> random shift in [low, high].
+        Default = fchans (no overlap).
+    """
+    if isinstance(waterfall_fn, str):
+        waterfall_fn = [waterfall_fn]
+
+    while True:
+        for fn in waterfall_fn:
+            info = Waterfall(fn, load_data=False)
+            fch1 = info.header['fch1']
+            nchans = info.header['nchans']
+            df = info.header['foff']
+            total_t = info.container.selection_shape[0]
+
+            if tchans is None:
+                t_keep = total_t
+            elif tchans > total_t:
+                raise ValueError("tchans larger than observation length")
+            else:
+                t_keep = tchans
+
+            # 初始窗口
+            f_start, f_stop = fch1, fch1 + fchans * df
+
+            # 遍历直到剩余不够 fchans
+            while np.abs(f_stop - fch1) <= np.abs(nchans * df):
+                fmin, fmax = np.sort([f_start, f_stop])
+                wf = Waterfall(fn, f_start=fmin, f_stop=fmax,
+                               t_start=0, t_stop=t_keep)
+                yield wf
+
+                # 计算 shift
+                if f_shift is None:
+                    step = fchans
+                elif isinstance(f_shift, (tuple, list)) and len(f_shift) == 2:
+                    step = random.randint(f_shift[0], f_shift[1])
+                else:
+                    step = int(f_shift)
+
+                f_start += step * df
+                f_stop += step * df
+
+
 def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=False, spectrum_type='mean'):
     """
     Plot and save specific type of spectrograms from a dynamic dataset.
@@ -287,7 +344,7 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=Fals
             spec = noisy_spec.squeeze().numpy()
         elif kind == 'mask':
             if with_spectrum:
-                print("[\033[33mWarning\033[0m] Cannot plot frequency spectrum with mask, ignoring.")
+                print("[\033[33mWarn\033[0m] Cannot plot frequency spectrum with mask, ignoring.")
                 with_spectrum = False
             spec = rfi_mask.squeeze().float().numpy()
 
@@ -301,7 +358,10 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=Fals
             freqs = fch1 - np.arange(fchans) * df
 
         if with_spectrum:
-            fig, axs = plt.subplots(2, 1, figsize=(15, 6), sharex=True)
+            if spectrum_type == "fft2d":
+                fig, axs = plt.subplots(2, 1, figsize=(15, 6), sharex=False)
+            else:
+                fig, axs = plt.subplots(2, 1, figsize=(15, 6), sharex=True)
 
             if spectrum_type == "fft2d":
                 # 原始动态频谱
@@ -375,7 +435,8 @@ if __name__ == "__main__":
                                      drift_min=drift_min, drift_max=drift_max, drift_min_abs=drift_min_abs,
                                      snr_min=15.0, snr_max=25.0, width_min=10, width_max=30, num_signals=(1, 1),
                                      noise_std_min=0.025, noise_std_max=0.05, noise_mean_min=2, noise_mean_max=3,
-                                     noise_type='chi2', use_fil=False, background_fil="")
+                                     noise_type='chi2', use_fil=True,
+                                     background_fil="../data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil")
 
     """
     参数生成 Refs:
@@ -390,6 +451,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    plot_samples(dataset, kind='clean', num=10, with_spectrum=False, spectrum_type='mean')
-    # plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='mean')
+    # plot_samples(dataset, kind='clean', num=10, with_spectrum=False, spectrum_type='mean')
+    plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
     # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)

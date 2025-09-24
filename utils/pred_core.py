@@ -88,7 +88,8 @@ def _process_batch_core(model, batch, device, mode):
     }
 
 
-def _save_batch_results(results, idx, save_dir, model_class_name, save_npy=False, plot=True, mode='detection'):
+def _save_batch_results(results, idx, save_dir, model_class_name, mode='detection', save_npy=False, plot=True,
+                        **nms_kwargs):
     """
     Save and visualize results for a single batch
 
@@ -97,9 +98,10 @@ def _save_batch_results(results, idx, save_dir, model_class_name, save_npy=False
         idx: Batch index (used for filenames)
         save_dir: Directory to save outputs
         model_class_name: Name of model class (for plot subfolder)
+        mode: 'mask' or 'detection'
         save_npy: Whether to save numpy arrays
         plot: Whether to generate visualization plots
-        mode: 'mask' or 'detection'
+        **nms_kwargs: Keyword arguments for NMS (if applicable)
     """
     # Create plot directory if needed
     plot_dir = Path(save_dir) / "plots" / model_class_name
@@ -171,9 +173,10 @@ def _save_batch_results(results, idx, save_dir, model_class_name, save_npy=False
             # Process predictions
             pred_boxes = None
             if results["raw_preds"] is not None:
-                det_out = decode_F(results["raw_preds"])
-                pred_boxes_list = nms_1d(det_out)
-                pred_boxes = pred_boxes_list[0]  # Assuming B=1
+                det_outs = [decode_F(raw) for raw in results["raw_preds"]]  # List of (B, N_i, 3)
+                det_out = torch.cat(det_outs, dim=1)  # (B, total_N, 3)
+                pred_boxes_list = nms_1d(det_out, **nms_kwargs)  # 一次性 NMS
+                pred_boxes = pred_boxes_list[0]  # Assuming B=1, (M, 3)
                 pred_starts = pred_boxes[:, 0].cpu().numpy()
                 pred_stops = pred_boxes[:, 1].cpu().numpy()
                 N_pred = len(pred_starts)
@@ -191,7 +194,8 @@ def _save_batch_results(results, idx, save_dir, model_class_name, save_npy=False
             # Create figure with subplots
             fig, axs = plt.subplots(3, 1, figsize=(14, 21))
 
-            def plot_spec(ax, data, title, cmap='viridis', boxes=None, color='red', linestyle='--', linewidth=0.5):
+            def plot_spec(ax, data, title, cmap='viridis', boxes=None, normalized=False, color='red', linestyle='--',
+                          linewidth=2):
                 """Helper function to plot spectrum data with optional boxes"""
                 im = ax.imshow(data, aspect='auto', origin='lower',
                                extent=[freq_axis[0], freq_axis[-1], 0, time_frames], cmap=cmap)
@@ -199,14 +203,16 @@ def _save_batch_results(results, idx, save_dir, model_class_name, save_npy=False
                 ax.set_ylabel("Time Frame")
                 fig.colorbar(im, ax=ax, label="Intensity")
                 if boxes is not None:
-                    plot_F_lines(ax, freq_axis, boxes, normalized=False, color=color, linestyle=linestyle,
+                    plot_F_lines(ax, freq_axis, boxes, normalized=normalized, color=color, linestyle=linestyle,
                                  linewidth=linewidth)
 
             # Plot all components
             plot_spec(axs[0], clean_spec if clean_spec is not None else np.zeros_like(noisy_spec),
                       "Clean Spectrum")
-            plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis', boxes=gt_boxes_tuple, color='blue')
-            plot_spec(axs[2], denoised_spec, "Denoised Spectrum", cmap='viridis', boxes=pred_boxes_tuple)
+            plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis', boxes=gt_boxes_tuple, normalized=True,
+                      color='red')
+            plot_spec(axs[2], denoised_spec, "Denoised Spectrum", cmap='viridis', normalized=True,
+                      boxes=pred_boxes_tuple, color='green')
 
             axs[-1].set_xlabel("Frequency Channel")
             plt.tight_layout()
@@ -230,7 +236,8 @@ def pred(model: torch.nn.Module,
          max_steps: Optional[int] = None,
          idx: Optional[int] = None,
          save_npy: bool = True,
-         plot: bool = False):
+         plot: bool = False,
+         **nms_kwargs):
     """
     Unified prediction function that handles both batch and dataloader processing, and pipeline mode
 
@@ -239,6 +246,7 @@ def pred(model: torch.nn.Module,
         data: Either a DataLoader (for dataloader mode) or a batch tensor (for batch mode)
         save_dir: Directory to save outputs
         device: Computation device
+        mode: 'mask' or 'detection'
         data_mode: Processing mode:
               "dbl" for batch mode (process single batch),
               otherwise dataloader mode (process entire dataloader)
@@ -246,7 +254,7 @@ def pred(model: torch.nn.Module,
         idx: For batch mode, batch index (for filenames)
         save_npy: Whether to save numpy outputs
         plot: Whether to generate plots
-        mode: 'mask' or 'detection'
+        nms_kwargs: NMS keyword arguments for detection mode
     """
     assert mode in ('mask', 'detection'), f"Unsupported mode: {mode}"
 
@@ -260,7 +268,7 @@ def pred(model: torch.nn.Module,
 
             # Process single batch
             results = _process_batch_core(model, data, device, mode)
-            _save_batch_results(results, idx, save_dir, model.__class__.__name__, save_npy, plot, mode)
+            _save_batch_results(results, idx, save_dir, model.__class__.__name__, mode, save_npy, plot, **nms_kwargs)
 
         else:  # Dataloader processing mode
             if max_steps is None:
@@ -272,4 +280,5 @@ def pred(model: torch.nn.Module,
                     break
 
                 results = _process_batch_core(model, batch, device, mode)
-                _save_batch_results(results, batch_idx, save_dir, model.__class__.__name__, save_npy, plot, mode)
+                _save_batch_results(results, batch_idx, save_dir, model.__class__.__name__, mode, save_npy, plot,
+                                    **nms_kwargs)

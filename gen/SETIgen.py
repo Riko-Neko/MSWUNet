@@ -1,3 +1,4 @@
+import random
 from datetime import datetime
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from gen.FRIgen import add_rfi
 
 def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, signals=None, noise_x_mean=0.0,
                           noise_x_std=1.0, mode='test', noise_type='normal', rfi_params=None, seed=None, plot=False,
-                          plot_filename=None, background_fil=None):
+                          plot_filename=None, waterfall_itr=None):
     """
         使用 SetiGen 库合成动态频谱并注入射频干扰（RFI）。
 
@@ -131,17 +132,12 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
     elif not isinstance(fch1, u.Quantity):
         fch1 = fch1 * u.Hz
 
-    use_fil = False
-    if background_fil and np.random.random() < 0.0:
-        waterfall_itr = stg.split_waterfall_generator(background_fil, fchans, tchans=tchans, f_shift=None)
+    if waterfall_itr:
         waterfall = next(waterfall_itr)
         # 创建 Frame (使用背景噪声)
         frame = stg.Frame(waterfall)
         clean_spec = np.zeros_like(frame.data)
-        signals = []
-        use_fil = True
-
-    if not use_fil:
+    else:
         # 创建 Frame
         frame = stg.Frame(fchans=fchans, tchans=tchans, df=df, dt=dt, fch1=fch1, ascending=ascending)
         clean_spec = np.zeros_like(frame.data)
@@ -155,6 +151,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
     # 注入信号
     f_starts = []
     f_stops = []
+    level = frame.get_intensity(random.uniform(10, 20))
     if signals:
         for sig in signals:
             # 计算起始频率
@@ -249,13 +246,13 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
         rfi_mask = None
 
     # 添加低漂移率 RFI（使用 setigen，constant 类型）
-    if rfi_params and not use_fil:
+    if rfi_params:
         for _ in range(rfi_params.get('LowDrift', 0)):
             f_index = np.random.randint(0, fchans)
             f_start = frame.get_frequency(f_index)
             drift_rate = np.random.uniform(-0.0001, 0.0001) * u.Hz / u.s
             path = stg.constant_path(f_start=f_start, drift_rate=drift_rate)
-            rlevel = rfi_params.get('LowDrift_amp', 1.0) * noise_x_std
+            rlevel = rfi_params.get('LowDrift_amp_factor', 1.0) * (level if level else 1.0)
             # 默认 constant 调制
             t_profile = stg.constant_t_profile(level=rlevel)
             # 以 0.3 概率应用时间调制
@@ -281,7 +278,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
                 rfi_mask |= (added_signal > 0.1 * rlevel)
 
     # 注入传统 RFI
-    if rfi_params and np.random.random() < 0.5 and not use_fil:
+    if rfi_params and np.random.random() < 0.5:
         noisy_spec, traditional_rfi_mask = add_rfi(frame.get_data(db=False).copy(), rfi_params, noise_x_std * 0.25)
         if mode == 'mask' or mode == 'test':
             rfi_mask |= traditional_rfi_mask

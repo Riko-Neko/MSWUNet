@@ -59,7 +59,7 @@ def search_doppler_h5(h5_path_or_dir, out_dir='./test_out/truboseti_blis692ns', 
         return
 
     if not h5_files:
-        print(f"[\033[33mWarning\033[0m] No .h5 files found in '{h5_path_or_dir}'")
+        print(f"[\033[33mWarn\033[0m] No .h5 files found in '{h5_path_or_dir}'")
         return
 
     for h5_file in h5_files:

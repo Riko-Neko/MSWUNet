@@ -45,14 +45,24 @@ nosie_type = "chi2"
 use_fil = False
 background_fil = ""
 
+# Observation data
+# obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
+# obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
+# obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil"
+obs_file_path = "./data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil"
+
 # Prediction config
-batch_size = 1
+batch_size = 1  # Fixed to 1 for now
 num_workers = 0
 pred_dir = "./pred_results"
 pred_steps = 100
 dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
 unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 P = 2
+
+# NMS config
+iou_thresh = 1.0
+top_k = 2
 
 # hits conf info
 drift = [-4.0, 4.0]
@@ -71,26 +81,45 @@ dwtnet_args = dict(
 unet_args = dict()
 
 
-def main(mode=None, ui=False, obs=False, verbose=False, *args):
+def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
     # Set random seeds
     torch.manual_seed(42)
     np.random.seed(42)
 
     # Set device
-    if torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        device = torch.device("mps")
-    elif torch.cuda.is_available():
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
+    def check_device(dev):
+        try:
+            if dev.type == "cuda":
+                return torch.cuda.is_available()
+            elif dev.type == "mps":
+                return torch.backends.mps.is_available() and torch.backends.mps.is_built()
+            elif dev.type == "cpu":
+                return True
+            else:
+                return False
+        except Exception:
+            return False
+
+    if device is not None:
+        try:
+            device = torch.device(device)
+            if not check_device(device):
+                print(f"[\033[33mWarn\033[0m] Device '{device}' is not available. Fallback to default...")
+                device = None
+        except Exception as e:
+            print(f"[\033[33mWarn\033[0m] Invalid device argument ({device}): {e}. Fallback to default...")
+            device = None
+
+    if device is None:
+        if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+            device = torch.device("mps")
+        elif torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            device = torch.device("cpu")
 
     print(f"\n[\033[32mInfo\033[0m] Using device: {device}")
 
-    # Common file path for observation data
-    # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
-    # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
-    # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil"
-    obs_file_path = "./data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil"
     file_stem = Path(obs_file_path).stem
 
     # Create datasets based on mode and obs flag
@@ -132,10 +161,10 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
             print(f"[\033[32mInfo\033[0m] Processing sample {idx + 1}/{pred_steps}")
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
             pred(dwtnet, data_mode='dbl', mode=pmode, data=batch, idx=idx, save_dir=pred_dir, device=device,
-                 save_npy=False, plot=True)
+                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k)
             print("[\033[32mInfo\033[0m] Running UNet inference...")
             pred(unet, data_mode='dbl', mode=pmode, data=batch, idx=idx, save_dir=pred_dir, device=device,
-                 save_npy=False, plot=True)
+                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k)
 
 
     elif mode == "pipeline":
@@ -198,46 +227,42 @@ def main(mode=None, ui=False, obs=False, verbose=False, *args):
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
             dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
             pred(dwtnet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
-                 save_npy=False, plot=True)
+                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k)
         # --- 推理 UNet ---
         if execute1:
             print("[\033[32mInfo\033[0m] Running UNet inference...")
             unet = load_model(UNet, unet_ckpt, **unet_args)
             pred(unet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
-                 save_npy=False, plot=True)
+                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Select the run mode")
-    parser.add_argument(
-        "--mode",
-        type=str,
-        choices=["dbl", "pipeline"],
-        help="Run mode: no argument for single-model pred, 'dbl' for dual-model comparison, 'pipeline' for pipeline processing"
-    )
-    parser.add_argument(
-        "--ui",
-        action="store_true",
-        default=False,
-        help="Run pipeline in UI mode"
-    )
-    parser.add_argument(
-        "--obs",
-        action="store_true",
-        default=False,
-        help="Use observation data file for default and dbl modes"
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        default=False,
-        help="Use verbose output for pipeline mode"
-    )
+    parser.add_argument("--mode",
+                        type=str,
+                        choices=["dbl", "pipeline"],
+                        help="Run mode: no argument for single-model pred, 'dbl' for dual-model comparison, 'pipeline' for pipeline processing")
+    parser.add_argument("--ui",
+                        action="store_true",
+                        default=False,
+                        help="Run pipeline in UI mode")
+    parser.add_argument("--obs",
+                        action="store_true",
+                        default=False,
+                        help="Use observation data file for default and dbl modes")
+    parser.add_argument("--verbose",
+                        action="store_true",
+                        default=False,
+                        help="Use verbose output for pipeline mode")
+    parser.add_argument("-d", "--device",
+                        type=str,
+                        default=None,
+                        help="Device to use for inference (e.g. 'cuda:0', 'cpu', 'mps')")
     args = parser.parse_args()
 
     if args.mode is None:
-        main(None, args.ui, args.obs, args.verbose, True, False)
+        main(None, args.ui, args.obs, args.verbose, args.device, True, False)
     elif args.mode == "dbl":
-        main("dbl", args.ui, args.obs, args.verbose)
+        main("dbl", args.ui, args.obs, args.verbose, args.device)
     elif args.mode == "pipeline":
-        main("pipeline", args.ui, args.obs, args.verbose)
+        main("pipeline", args.ui, args.obs, args.verbose, args.device)
