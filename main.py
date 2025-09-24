@@ -61,8 +61,9 @@ noise_std_max = 0.05
 noise_mean_min = 2
 noise_mean_max = 3
 nosie_type = "chi2"
-use_fil = False
-background_fil = ""
+use_fil = True
+fil_folder = Path('./data/33exoplanets/bk/pollution')
+background_fil = list(fil_folder.rglob("*.fil"))
 
 # Training config
 batch_size = 16
@@ -142,7 +143,7 @@ def main():
     model = DWTNet(**dwtnet_args)
     # model = UNet(**unet_args)
 
-    summary(model, input_size=(1, 1, 128, 1024))
+    summary(model, input_size=(1, 1, 116, 1024))
 
     # Loss function and optimizer
     # criterion = MaskCombinedLoss(device, alpha=1.0, beta=0., gamma=0., delta=0., momentum=0.99, fixed_g_d=True)
@@ -157,7 +158,7 @@ def main():
 
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True,
     #                                                  min_lr=1e-9)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30, eta_min=1.0e-11)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30, eta_min=1.0e-12)
 
     # Check for latest checkpoint to resume from
     checkpoint_files = list(Path(checkpoint_dir).glob("model_epoch_*.pth"))

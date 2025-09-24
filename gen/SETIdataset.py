@@ -452,5 +452,5 @@ if __name__ == "__main__":
     """
 
     # plot_samples(dataset, kind='clean', num=10, with_spectrum=False, spectrum_type='mean')
-    plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
+    plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='mean')
     # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)

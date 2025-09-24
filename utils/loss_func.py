@@ -34,7 +34,6 @@ Design notes:
 def _valid_gt_mask(gt_starts: torch.Tensor, gt_stops: torch.Tensor) -> torch.Tensor:
     """Return boolean mask of valid GTs (start < stop and finite and in range)."""
     valid = torch.isfinite(gt_starts) & torch.isfinite(gt_stops)
-    valid &= (gt_stops > gt_starts)
     return valid
 
 

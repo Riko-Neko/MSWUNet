@@ -55,14 +55,15 @@ obs_file_path = "./data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil"
 batch_size = 1  # Fixed to 1 for now
 num_workers = 0
 pred_dir = "./pred_results"
-pred_steps = 100
+pred_steps = 10
 dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
 unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 P = 2
 
 # NMS config
-iou_thresh = 1.0
-top_k = 2
+iou_thresh = 0.8
+score_thresh = 0.99
+top_k = None
 
 # hits conf info
 drift = [-4.0, 4.0]
@@ -161,10 +162,10 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
             print(f"[\033[32mInfo\033[0m] Processing sample {idx + 1}/{pred_steps}")
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
             pred(dwtnet, data_mode='dbl', mode=pmode, data=batch, idx=idx, save_dir=pred_dir, device=device,
-                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k)
+                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k, score_thresh=score_thresh, )
             print("[\033[32mInfo\033[0m] Running UNet inference...")
             pred(unet, data_mode='dbl', mode=pmode, data=batch, idx=idx, save_dir=pred_dir, device=device,
-                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k)
+                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k, score_thresh=score_thresh, )
 
 
     elif mode == "pipeline":
@@ -196,7 +197,8 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                     print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
                     processor = SETIPipelineProcessor(dataset, model, device, log_dir=f.stem, drift=drift,
                                                       snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
-                                                      verbose=verbose)
+                                                      verbose=verbose, nms_iou_thresh=iou_thresh,
+                                                      nms_score_thresh=score_thresh, nms_top_k=top_k)
                     processor.process_all_patches()
 
         else:
@@ -216,7 +218,8 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                 print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
                 processor = SETIPipelineProcessor(dataset, model, device, log_dir=file_stem, drift=drift,
                                                   snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
-                                                  verbose=verbose)
+                                                  verbose=verbose, nms_iou_thresh=iou_thresh,
+                                                  nms_score_thresh=score_thresh, nms_top_k=top_k)
                 processor.process_all_patches()
 
     else:
@@ -227,13 +230,13 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
             dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
             pred(dwtnet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
-                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k)
+                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k, score_thresh=score_thresh)
         # --- 推理 UNet ---
         if execute1:
             print("[\033[32mInfo\033[0m] Running UNet inference...")
             unet = load_model(UNet, unet_ckpt, **unet_args)
             pred(unet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
-                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k)
+                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k, score_thresh=score_thresh)
 
 
 if __name__ == "__main__":

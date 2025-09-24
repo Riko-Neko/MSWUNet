@@ -1,45 +1,45 @@
+from typing import Optional, List
+
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 
-def decode_F(raw: torch.Tensor, w_scale: float = 4.0) -> torch.Tensor:
+def decode_F(raw: torch.Tensor, mode='soft', temp: float = 0.5) -> torch.Tensor:
     """
-    raw: (B, P, 3, T, F)
-    return: (B, N, 3) -> [f_start, f_stop, conf], normalized to [0,1]
-    NOTE: This method does NOT remove time information from features; it flattens time axis
-          only in output sequence. The head still saw full (T,F) context.
+    Decode raw predictions for global normalized [0,1] f_start/f_stop with soft temporal aggregation.
+
+    Args:
+        raw: (B, P, 3, T, F) where 3=(f_start_logits, f_stop_logits, conf_logits)
+        mode: temporal aggregation options (must match loss mode)
+        temp: temperature for softmax temporal aggregation (matches soft mode in loss)
+
+    Returns:
+        det_out: (B, N, 3) -> [f_start, f_stop, conf], normalized to [0,1]
+                 where N = F * P (time dimension aggregated via softmax)
     """
-    B, P, _, T, F = raw.shape
+    B, P, _, T, _F = raw.shape
     device = raw.device
     dtype = raw.dtype
 
     # (B, T, F, P, 3)
     r = raw.permute(0, 3, 4, 1, 2).contiguous()
 
-    # frequency cell indices, shape (1,1,F,1)
-    f_idx = torch.arange(F, device=device, dtype=dtype).view(1, 1, F, 1)
-
     # extract channels
-    f_off_logits = r[..., 0]  # (B, T, F, P)
-    log_f_w = r[..., 1]
+    f_start = r[..., 0]  # (B, T, F, P)
+    f_stop = r[..., 1]
     conf_logits = r[..., 2]
 
-    # decode
-    f_off = torch.sigmoid(f_off_logits)  # inside cell offset [0,1]
-    f_center_abs = (f_idx + f_off) / float(F)  # normalized center in [0,1]
+    # soft temporal aggregation (matches soft mode in FreqDetectionLoss)
+    conf_weights = F.softmax(conf_logits / (temp + 1e-12), dim=1)  # (B, T, F, P)
 
-    cell_freq = float(1.0 / float(F))
-    # convert to same dtype device (not strictly necessary for math but keeps FP consistent)
-    cell_freq = raw.new_tensor(cell_freq)
+    # weighted sum over time (dim=1)
+    f_start = (f_start * conf_weights).sum(dim=1)  # (B, F, P)
+    f_stop = (f_stop * conf_weights).sum(dim=1)  # (B, F, P)
+    conf = conf_logits.max(dim=1)[0]  # (B, F, P), max conf over time
 
-    f_half = 0.5 * torch.exp(log_f_w) * cell_freq * float(w_scale)
-
-    f_start = (f_center_abs - f_half).clamp(0.0, 1.0)
-    f_stop = (f_center_abs + f_half).clamp(0.0, 1.0)
-    conf = torch.sigmoid(conf_logits)
-
-    # flatten spatial + P dims -> N = T * F * P
-    Ncells = T * F * P
+    # flatten F and P dims -> N = F * P
+    Ncells = _F * P
     f_start = f_start.view(B, Ncells)  # (B, N)
     f_stop = f_stop.view(B, Ncells)
     conf = conf.view(B, Ncells)
@@ -48,45 +48,88 @@ def decode_F(raw: torch.Tensor, w_scale: float = 4.0) -> torch.Tensor:
     return det_out
 
 
-def nms_1d(det_out, iou_thresh=0.5, top_k=None):
+def nms_1d(det_out: torch.Tensor, iou_thresh: float = 0.5, top_k: Optional[int] = None,
+           score_thresh: Optional[float] = None, eps: float = 1e-13) -> List[torch.Tensor]:
     """
-    Batched 1D NMS for frequency intervals.
+    Batched 1D NMS for intervals.
 
     Args:
-        det_out: (B, N, 3) -> [f_start, f_stop, conf]
-        iou_thresh: float, IoU threshold for suppression
-        top_k: int or None, max number of intervals to keep per batch
+        det_out: (B, N, 3) or (N, 3) -> [start, stop, score]
+        iou_thresh: IoU threshold for suppression
+        top_k: max number of intervals to keep per batch (after NMS)
+        score_thresh: if not None, drop intervals with score < score_thresh before NMS
+        eps: small number to avoid div-by-zero
+
     Returns:
-        List of tensors, each shape (M, 3) for one batch
+        results: list of length B, each is tensor (M,3) on same device/dtype as det_out
     """
-    B, N, _ = det_out.shape
+    if det_out.ndim == 2:
+        det_out = det_out.unsqueeze(0)  # make it (1, N, 3)
+
+    B, N, C = det_out.shape
+    assert C >= 3, "det_out last dim should be >= 3 (start, stop, score)"
+
     device = det_out.device
+    dtype = det_out.dtype
     results = []
 
     for b in range(B):
-        boxes = det_out[b]  # (N, 3)
-        starts, stops, scores = boxes[:, 0], boxes[:, 1], boxes[:, 2]
+        boxes = det_out[b]  # (N,3)
+        starts = boxes[:, 0]
+        stops = boxes[:, 1]
+        scores = boxes[:, 2]
+
+        # basic validity mask: stop >= start and finite values
+        valid = (stops >= starts) & torch.isfinite(starts) & torch.isfinite(stops) & torch.isfinite(scores)
+        if score_thresh is not None:
+            valid &= (scores >= score_thresh)
+
+        if not valid.any():
+            results.append(torch.empty((0, 3), dtype=dtype, device=device))
+            continue
+
+        boxes = boxes[valid]
+        starts = boxes[:, 0]
+        stops = boxes[:, 1]
+        scores = boxes[:, 2]
+
+        # sort by score descending
         order = torch.argsort(scores, descending=True)
-        starts, stops, scores = starts[order], stops[order], scores[order]
-        keep = []
-        suppressed = torch.zeros(N, dtype=torch.bool, device=device)
+        keep_idx = []  # indices into `boxes`
 
-        for i in range(N):
-            if suppressed[i]:
-                continue
+        # standard greedy NMS loop (works with indices into boxes)
+        while order.numel() > 0:
+            i = int(order[0].item())  # index into boxes
+            keep_idx.append(i)
 
-            keep.append([starts[i].item(), stops[i].item(), scores[i].item()])
-            inter_start = torch.maximum(starts[i], starts[i + 1:])
-            inter_stop = torch.minimum(stops[i], stops[i + 1:])
-            inter = torch.clamp(inter_stop - inter_start, min=0.0)
-            union = (stops[i] - starts[i]) + (stops[i + 1:] - starts[i + 1:]) - inter
-            ious = inter / union.clamp(min=1e-9)
-            suppressed[i + 1:] |= (ious > iou_thresh)
-        keep = torch.tensor(keep, device=device)
+            if order.numel() == 1:
+                break
 
-        if top_k is not None and keep.size(0) > top_k:
-            keep = keep[:top_k]
-        results.append(keep)
+            others = order[1:]  # tensor of indices
+            # compute intersection/union with current box i
+            inter_start = torch.maximum(starts[i], starts[others])
+            inter_stop = torch.minimum(stops[i], stops[others])
+            inter = (inter_stop - inter_start).clamp(min=0.0)
+
+            union = (stops[i] - starts[i]) + (stops[others] - starts[others]) - inter
+            ious = inter / (union + eps)
+
+            # keep those with IoU <= threshold
+            keep_mask = ious <= iou_thresh
+            order = order[1:][keep_mask]
+
+        # gather kept boxes (preserves device/dtype)
+        if len(keep_idx) == 0:
+            kept = torch.empty((0, 3), dtype=dtype, device=device)
+        else:
+            keep_idx_tensor = torch.as_tensor(keep_idx, dtype=torch.long, device=device)
+            kept = boxes[keep_idx_tensor]
+
+        # optionally trim top_k
+        if top_k is not None and kept.size(0) > top_k:
+            kept = kept[:top_k]
+
+        results.append(kept)
 
     return results
 
