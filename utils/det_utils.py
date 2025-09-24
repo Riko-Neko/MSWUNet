@@ -44,7 +44,7 @@ def decode_F(raw: torch.Tensor, mode='soft', temp: float = 0.5) -> torch.Tensor:
     f_stop = f_stop.view(B, Ncells)
     conf = conf.view(B, Ncells)
 
-    det_out = torch.stack([f_start, f_stop, conf], dim=2)  # (B, N, 3)
+    det_out = torch.stack([f_start, f_stop, torch.sigmoid(conf)], dim=2)  # (B, N, 3)
     return det_out
 
 

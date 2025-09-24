@@ -42,8 +42,9 @@ noise_std_max = 0.05
 noise_mean_min = 2
 noise_mean_max = 3
 nosie_type = "chi2"
-use_fil = False
-background_fil = ""
+use_fil = True
+background_fil = ['./data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil',
+                  './data/33exoplanets/HD-180617_M04_pol1_f1400.00-1410.00.fil']
 
 # Observation data
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
@@ -57,13 +58,14 @@ num_workers = 0
 pred_dir = "./pred_results"
 pred_steps = 10
 dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
+# dwtnet_ckpt = Path("./archived/weights/20250924_33e_det.pth")
 unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 P = 2
 
 # NMS config
-iou_thresh = 0.8
+iou_thresh = 0.75
 score_thresh = 0.99
-top_k = None
+top_k = 10
 
 # hits conf info
 drift = [-4.0, 4.0]
@@ -195,7 +197,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                         app.exec_()
                 else:
                     print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
-                    processor = SETIPipelineProcessor(dataset, model, device, log_dir=f.stem, drift=drift,
+                    processor = SETIPipelineProcessor(dataset, model, device, mode=pmode, log_dir=f.stem, drift=drift,
                                                       snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
                                                       verbose=verbose, nms_iou_thresh=iou_thresh,
                                                       nms_score_thresh=score_thresh, nms_top_k=top_k)
@@ -216,7 +218,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                 sys.exit(app.exec_())
             else:
                 print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
-                processor = SETIPipelineProcessor(dataset, model, device, log_dir=file_stem, drift=drift,
+                processor = SETIPipelineProcessor(dataset, model, device, mode=pmode, log_dir=file_stem, drift=drift,
                                                   snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
                                                   verbose=verbose, nms_iou_thresh=iou_thresh,
                                                   nms_score_thresh=score_thresh, nms_top_k=top_k)

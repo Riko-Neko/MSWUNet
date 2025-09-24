@@ -13,11 +13,13 @@ from PyQt5.QtWidgets import (QWidget, QToolTip, QLabel,
 
 from pipeline.metrics import execute_hits_hough
 from pipeline.pipeline_processor import SETIPipelineProcessor
+from utils.det_utils import decode_F, nms_1d, plot_F_lines
 
 
 class SETIWaterfallRenderer(QWidget):
-    def __init__(self, dataset, model, device, log_dir=Path("./pipeline/log"), verbose=False, parent=None,
-                 drift=[0.05, 4.0], snr_threshold=5.0, min_abs_drift=0.05):
+    def __init__(self, dataset, model, device, mode='mask', log_dir=Path("./pipeline/log"),
+                 verbose=False, parent=None, drift=[0.05, 4.0], snr_threshold=5.0,
+                 min_abs_drift=0.05, nms_iou_thresh=0.5, nms_score_thresh=0.5, nms_top_k=10):
         """
         Initialize the SETI waterfall renderer with dataset and model
 
@@ -25,15 +27,32 @@ class SETIWaterfallRenderer(QWidget):
             dataset: SETIDataset instance
             model: Trained DWTNet model
             device: Computation device (e.g., 'cuda' or 'cpu')
+            mode: 'mask' or 'detection' - operating mode
             log_dir: Directory for logs
             verbose: Whether to use simple console output
+            drift: Drift rate range for mask mode [min_drift, max_drift] in Hz/s
+            snr_threshold: SNR threshold for mask mode hits detection
+            min_abs_drift: Minimum absolute drift rate for mask mode
+            nms_iou_thresh: IoU threshold for detection mode NMS
+            nms_score_thresh: Confidence threshold for detection mode NMS
+            nms_top_k: Maximum number of detections to keep per patch
         """
         super().__init__(parent)
+        self.mode = mode
         self.drift = drift
         self.snr_threshold = snr_threshold
         self.min_abs_drift = min_abs_drift
+        self.nms_iou_thresh = nms_iou_thresh
+        self.nms_score_thresh = nms_score_thresh
+        self.nms_top_k = nms_top_k
 
-        self.processor = SETIPipelineProcessor(dataset, model, device, log_dir=log_dir, verbose=verbose)
+        # Initialize processor with mode-specific parameters
+        self.processor = SETIPipelineProcessor(
+            dataset, model, device, mode=mode, log_dir=log_dir, verbose=verbose,
+            drift=drift, snr_threshold=snr_threshold, min_abs_drift=min_abs_drift,
+            nms_iou_thresh=nms_iou_thresh, nms_score_thresh=nms_score_thresh, nms_top_k=nms_top_k
+        )
+
         self.dataset = self.processor.dataset
         self.model = self.processor.model
         self.device = self.processor.device
@@ -132,7 +151,7 @@ class SETIWaterfallRenderer(QWidget):
         info_layout = QVBoxLayout(self.info_panel)
 
         # Title label
-        title = QLabel("SETI Waterfall Processor")
+        title = QLabel(f"SETI Waterfall Processor ({mode} mode)")
         title.setStyleSheet("font-weight: bold; font-size: 16px;")
         info_layout.addWidget(title)
 
@@ -152,8 +171,11 @@ class SETIWaterfallRenderer(QWidget):
         stats_layout.addWidget(self.detections_label)
         info_layout.addLayout(stats_layout)
 
-        # Confidence threshold slider info
-        self.confidence_label = QLabel("Detection Threshold: >0.8 or <0.2")
+        # Confidence threshold info
+        if self.mode == 'mask':
+            self.confidence_label = QLabel("Detection Threshold: >0.8 or <0.2")
+        else:
+            self.confidence_label = QLabel(f"Detection Threshold: >{nms_score_thresh}")
         info_layout.addWidget(self.confidence_label)
 
         # Control buttons
@@ -281,6 +303,39 @@ class SETIWaterfallRenderer(QWidget):
         self.processed_label.setText(f"Processed: {processed}")
         self.detections_label.setText(f"Detections: {detections}")
 
+    def _process_detection_predictions(self, raw_preds, freq_range):
+        """
+        Process detection mode predictions to extract frequency intervals
+
+        Args:
+            raw_preds: Raw detection predictions from model
+            freq_range: Frequency range tuple (min_freq, max_freq) in MHz
+
+        Returns:
+            pred_boxes_tuple: Tuple (N, f_starts, f_stops) for plotting
+        """
+        # Decode predictions
+        det_outs = [decode_F(raw) for raw in raw_preds]  # List of (B, N_i, 3)
+        det_out = torch.cat(det_outs, dim=1)  # (B, total_N, 3)
+
+        # Apply NMS
+        pred_boxes_list = nms_1d(det_out,
+                                 iou_thresh=self.nms_iou_thresh,
+                                 score_thresh=self.nms_score_thresh,
+                                 top_k=self.nms_top_k)
+
+        # Process detections for the first batch item (assuming B=1)
+        pred_boxes = pred_boxes_list[0]  # (M, 3) - [f_start, f_stop, confidence]
+
+        if len(pred_boxes) == 0:
+            return (0, [], [])
+
+        # Extract start and stop frequencies (normalized)
+        f_starts = pred_boxes[:, 0].cpu().numpy()
+        f_stops = pred_boxes[:, 1].cpu().numpy()
+
+        return (len(pred_boxes), f_starts, f_stops)
+
     def show_cell_detail(self, row, col):
         """
         Display detailed information for a cell, including:
@@ -295,8 +350,15 @@ class SETIWaterfallRenderer(QWidget):
         tchans = time_range_idx[1] - time_range_idx[0]
 
         patch_data = patch_data.to(self.device).unsqueeze(0)  # (1, 1, t, f)
+
         with torch.no_grad():
-            denoised, mask, logits = self.model(patch_data)
+            if self.mode == 'mask':
+                denoised, mask, logits = self.model(patch_data)
+                raw_preds = None
+            else:  # detection mode
+                denoised, raw_preds = self.model(patch_data)
+                logits = torch.tensor([0.0], device=self.device)  # Default logits
+
             denoised_np = denoised.squeeze().cpu().numpy()
         patch_np = patch_data.squeeze().cpu().numpy()
 
@@ -328,10 +390,11 @@ class SETIWaterfallRenderer(QWidget):
         cbar1 = fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
         cbar1.set_label("Intensity", fontsize=label_font)
 
-        # Load hits info and draw detected signal lines
-        patch_np_for_hits = patch_np  # (t, f)
-        df_hits = self.load_additional_info(row, col, denoised_np)
-        if not df_hits.empty:
+        # Load hits info and draw detected signals
+        df_hits = self.load_additional_info(row, col, denoised_np, raw_preds)
+
+        if self.mode == 'mask' and not df_hits.empty:
+            # Mask mode: draw Hough transform lines
             for i, (_, hit) in enumerate(df_hits.iterrows()):
                 drift_rate = hit['DriftRate']
                 uncorr_freq = hit['Uncorrected_Frequency']
@@ -339,7 +402,17 @@ class SETIWaterfallRenderer(QWidget):
                 f_abs_Hz = uncorr_freq + drift_rate * t_vals  # Hz
                 f_abs_MHz = freq_min - f_abs_Hz * 1e-6  # MHz
                 axs[1].plot(f_abs_MHz, t_vals, 'g--', label='Fit' if i == 0 else None, alpha=0.8)
-            axs[1].legend()
+            if not df_hits.empty:
+                axs[1].legend()
+
+        elif self.mode == 'detection' and raw_preds is not None:
+            # Detection mode: draw frequency interval boundaries
+            pred_boxes_tuple = self._process_detection_predictions(raw_preds, freq_range)
+            if pred_boxes_tuple[0] > 0:
+                # Create frequency array for plotting
+                freqs = np.linspace(freq_min, freq_max, 1000)
+                plot_F_lines(axs[1], freqs, pred_boxes_tuple, normalized=True,
+                             color='red', linestyle='-', linewidth=1.5)
 
         # Convert frequencies to absolute MHz for display
         if not df_hits.empty:
@@ -374,46 +447,64 @@ class SETIWaterfallRenderer(QWidget):
             self.hits_table.setColumnCount(0)
         else:
             self.hits_table.setRowCount(len(df_hits))
-            self.hits_table.setColumnCount(len(df_hits.columns))
-            self.hits_table.setHorizontalHeaderLabels(df_hits.columns)
+
+            # Determine columns based on mode
+            if self.mode == 'mask':
+                columns = ['DriftRate', 'SNR', 'Uncorrected_Frequency', 'freq_start', 'freq_end']
+            else:
+                columns = ['DriftRate', 'confidence', 'Uncorrected_Frequency', 'freq_start', 'freq_end']
+
+            # Filter columns to only include those present in the DataFrame
+            available_columns = [col for col in columns if col in df_hits.columns]
+            self.hits_table.setColumnCount(len(available_columns))
+            self.hits_table.setHorizontalHeaderLabels(available_columns)
+
             for i in range(len(df_hits)):
-                for j, col in enumerate(df_hits.columns):
-                    value = df_hits.iloc[i, j]
+                for j, col in enumerate(available_columns):
+                    value = df_hits.iloc[i][col]
                     if col in ['Uncorrected_Frequency', 'freq_start', 'freq_end']:
                         formatted_value = f"{value:.6f}"  # 6 decimal places for frequencies
+                    elif col in ['DriftRate', 'SNR', 'confidence']:
+                        formatted_value = f"{value:.4f}"  # 4 decimal places for numerical values
                     else:
-                        formatted_value = f"{value:.2f}" if isinstance(value, (int, float)) else str(value)
+                        formatted_value = str(value)
                     self.hits_table.setItem(i, j, QTableWidgetItem(formatted_value))
             self.hits_table.resizeColumnsToContents()
 
-    def load_additional_info(self, row, col, denoised_np):
+    def load_additional_info(self, row, col, denoised_np, raw_preds=None):
         """
-        Load additional information about the cell using metrics.py
+        Load additional information about the cell
 
         Args:
             row (int): Row index
             col (int): Column index
             denoised_np (np.ndarray): Denoised patch data
+            raw_preds: Raw predictions for detection mode
 
         Returns:
-            str: Formatted hits information
+            DataFrame: Hits information
         """
-        # Execute hits detection on denoised data
-        df_hits = execute_hits_hough(
-            patch=denoised_np,
-            tsamp=self.tsamp,
-            foff=self.foff,
-            max_drift=self.drift[1],
-            min_drift=self.drift[0],
-            snr_threshold=self.snr_threshold,
-            min_abs_drift=self.min_abs_drift,
-            merge_tol=10000
-        )
+        if self.mode == 'mask':
+            # Execute hits detection on denoised data using Hough transform
+            df_hits = execute_hits_hough(
+                patch=denoised_np,
+                tsamp=self.tsamp,
+                foff=self.foff,
+                max_drift=self.drift[1],
+                min_drift=self.drift[0],
+                snr_threshold=self.snr_threshold,
+                min_abs_drift=self.min_abs_drift,
+                merge_tol=10000
+            )
+        else:  # detection mode
+            # Process detection predictions to generate hits
+            freq_range = self.freq_ranges[row][col]
+            time_range = self.time_ranges[row][col]
+            time_duration = time_range[1] - time_range[0]
 
-        if df_hits.empty:
-            return df_hits
-        else:
-            return df_hits
+            df_hits = self.processor._process_detection_hits(raw_preds, freq_range, time_range)
+
+        return df_hits
 
 
 class GridContent(QWidget):
@@ -462,9 +553,15 @@ class GridContent(QWidget):
                             else:
                                 color = UNPROCESSED
                         elif status:
-                            color = DETECTED_HIGH_CONF if confidence > 0.8 else UNCERTAIN
+                            if self.renderer.mode == 'mask':
+                                color = DETECTED_HIGH_CONF if confidence > 0.8 else UNCERTAIN
+                            else:  # detection mode
+                                color = DETECTED_HIGH_CONF if confidence > self.renderer.nms_score_thresh else UNCERTAIN
                         else:
-                            color = NO_SIGNAL_HIGH_CONF if confidence < 0.2 else UNCERTAIN
+                            if self.renderer.mode == 'mask':
+                                color = NO_SIGNAL_HIGH_CONF if confidence < 0.8 else UNCERTAIN
+                            else:  # detection mode
+                                color = NO_SIGNAL_HIGH_CONF if confidence <= self.renderer.nms_score_thresh else UNCERTAIN
 
                         # Fill cell with appropriate color
                         painter.fillRect(rect_x, rect_y, self.renderer.cell_size, self.renderer.cell_size, color)
@@ -499,9 +596,15 @@ class GridContent(QWidget):
                             else:
                                 color = UNPROCESSED
                         elif status:
-                            color = DETECTED_HIGH_CONF if confidence > 0.8 else UNCERTAIN
+                            if self.renderer.mode == 'mask':
+                                color = DETECTED_HIGH_CONF if confidence > 0.8 else UNCERTAIN
+                            else:  # detection mode
+                                color = DETECTED_HIGH_CONF if confidence > self.renderer.nms_score_thresh else UNCERTAIN
                         else:
-                            color = NO_SIGNAL_HIGH_CONF if confidence < 0.2 else UNCERTAIN
+                            if self.renderer.mode == 'mask':
+                                color = NO_SIGNAL_HIGH_CONF if confidence < 0.2 else UNCERTAIN
+                            else:  # detection mode
+                                color = NO_SIGNAL_HIGH_CONF if confidence <= self.renderer.nms_score_thresh else UNCERTAIN
 
                         painter.fillRect(rect_x, rect_y, self.renderer.cell_size, self.renderer.cell_size,
                                          color)
@@ -534,7 +637,8 @@ class GridContent(QWidget):
             tooltip = (f"Cell ({r}, {c})\n"
                        f"Status: {status_str}\n"
                        f"Frequency: {freq_min:.4f} - {freq_max:.4f} MHz\n"
-                       f"Time: {time_start:.2f} - {time_end:.2f} seconds")
+                       f"Time: {time_start:.2f} - {time_end:.2f} seconds\n"
+                       f"Mode: {self.renderer.mode}")
 
             QToolTip.showText(event.globalPos(), tooltip)
 
