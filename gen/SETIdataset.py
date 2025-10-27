@@ -100,9 +100,7 @@ class DynamicSpectrumDataset(Dataset):
             margin = int(0.2 * self.fchans)
             # 随机漂移率，确保绝对值不低于 drift_min_abs
             while True:
-                # 使用 Beta 分布采样，α=β=3 => 两端概率极低
-                x = random.betavariate(4, 4)
-                drift_rate = self.drift_min + x * (self.drift_max - self.drift_min)
+                drift_rate = random.uniform(self.drift_min, self.drift_max)
                 if abs(drift_rate) >= self.drift_min_abs:
                     break
             if drift_rate < 0:
@@ -433,7 +431,7 @@ if __name__ == "__main__":
     drift_min_abs = df // (tchans * dt)
     dataset = DynamicSpectrumDataset(mode='test', tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=True,
                                      drift_min=drift_min, drift_max=drift_max, drift_min_abs=drift_min_abs,
-                                     snr_min=15.0, snr_max=25.0, width_min=10, width_max=30, num_signals=(1, 1),
+                                     snr_min=15.0, snr_max=25.0, width_min=10, width_max=30, num_signals=(1, 2),
                                      noise_std_min=0.025, noise_std_max=0.05, noise_mean_min=2, noise_mean_max=3,
                                      noise_type='chi2', use_fil=True,
                                      background_fil="../data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil")
@@ -451,6 +449,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    # plot_samples(dataset, kind='clean', num=10, with_spectrum=False, spectrum_type='mean')
-    plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='mean')
+    plot_samples(dataset, kind='clean', num=100, with_spectrum=False, spectrum_type='fft2d')
+    # plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
     # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)

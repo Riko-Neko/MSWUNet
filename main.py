@@ -62,7 +62,7 @@ noise_mean_min = 2
 noise_mean_max = 3
 nosie_type = "chi2"
 use_fil = True
-fil_folder = Path('./data/33exoplanets/bk/pollution')
+fil_folder = Path('./data/33exoplanets/bk')
 background_fil = list(fil_folder.rglob("*.fil"))
 
 # Training config

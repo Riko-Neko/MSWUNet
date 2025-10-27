@@ -165,6 +165,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             # 漂移率
             drift = sig.get('drift_rate', 0.0)
             drift = (drift * u.Hz / u.s) if not isinstance(drift, u.Quantity) else drift
+            print(drift)
             # 强度
             if 'snr' in sig:
                 level = frame.get_intensity(sig['snr'])

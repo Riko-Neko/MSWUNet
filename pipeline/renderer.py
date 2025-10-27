@@ -17,8 +17,8 @@ from utils.det_utils import decode_F, nms_1d, plot_F_lines
 
 
 class SETIWaterfallRenderer(QWidget):
-    def __init__(self, dataset, model, device, mode='mask', log_dir=Path("./pipeline/log"),
-                 verbose=False, parent=None, drift=[0.05, 4.0], snr_threshold=5.0,
+    def __init__(self, dataset, model, device, mode='detection', log_dir=Path("./pipeline/log"),
+                 verbose=False, parent=None, drift=[-4.0, 4.0], snr_threshold=5.0,
                  min_abs_drift=0.05, nms_iou_thresh=0.5, nms_score_thresh=0.5, nms_top_k=10):
         """
         Initialize the SETI waterfall renderer with dataset and model

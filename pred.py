@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import QApplication
 from torch.utils.data import DataLoader
 
 from gen.SETIdataset import DynamicSpectrumDataset
-from model.DWTNet import DWTNet
+from model.DetDWTNet import DWTNet
 from model.UNet import UNet
 from pipeline.patch_engine import SETIWaterFullDataset
 from pipeline.pipeline_processor import SETIPipelineProcessor
@@ -17,7 +17,10 @@ from utils.pred_core import pred
 
 # Prediction modes
 pmode = "detection"
-# mode = "mask"
+# pmode = "mask"
+# dmode = "none"
+dmode = "edge"
+# dmode = "argmax"
 
 # Data config
 patch_t = 116
@@ -46,26 +49,35 @@ use_fil = True
 background_fil = ['./data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil',
                   './data/33exoplanets/HD-180617_M04_pol1_f1400.00-1410.00.fil']
 
+# Polarization config
+ignore_polarization = False
+stokes_mode = "I"
+XX_dir = "./data/XX/"
+YY_dir = "./data/YY/"
+
 # Observation data
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil"
 obs_file_path = "./data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil"
+# obs_file_path = "./data/33exoplanets/HD-180617_M04_pol1_f1400.00-1410.00.fil"
+# obs_file_path = './data/33exoplanets/'
+obs_file_path = obs_file_path if ignore_polarization else [XX_dir, YY_dir]
 
 # Prediction config
 batch_size = 1  # Fixed to 1 for now
 num_workers = 0
 pred_dir = "./pred_results"
-pred_steps = 10
+pred_steps = 100
 dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
-# dwtnet_ckpt = Path("./archived/weights/20250924_33e_det.pth")
+# dwtnet_ckpt = Path("./archived/weights/20250925_33e_det_realbk_none.pth")
 unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 P = 2
 
 # NMS config
-iou_thresh = 0.75
+iou_thresh = 0.1
 score_thresh = 0.99
-top_k = 10
+top_k = None
 
 # hits conf info
 drift = [-4.0, 4.0]
@@ -79,8 +91,8 @@ dwtnet_args = dict(
     wavelet_name='db4',
     extension_mode='periodization',
     P=P,
-    use_spp=True,
-    use_pan=True)
+    use_spp=False,
+    use_pan=False)
 unet_args = dict()
 
 
@@ -123,15 +135,19 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
 
     print(f"\n[\033[32mInfo\033[0m] Using device: {device}")
 
-    file_stem = Path(obs_file_path).stem
-
     # Create datasets based on mode and obs flag
     if obs and mode != "pipeline":
-        # Use pipeline dataset for obs mode
-        print("[\033[32mInfo\033[0m] Using observation data from:", obs_file_path)
-        dataset = SETIWaterFullDataset(file_path=obs_file_path, patch_t=patch_t, patch_f=patch_f,
-                                       overlap_pct=overlap_pct)
-        pred_dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
+        if isinstance(obs_file_path, list):
+            raise TypeError("In non-pipeline mode, observation data path should be a file, not a list.")
+        else:
+            if Path(obs_file_path).is_dir():
+                raise ValueError("In non-pipeline mode, observation data path should be a file, not a directory.")
+            # Use pipeline dataset for obs mode
+            print("[\033[32mInfo\033[0m] Using observation data from:", obs_file_path)
+            dataset = SETIWaterFullDataset(file_path=obs_file_path, patch_t=patch_t, patch_f=patch_f,
+                                           overlap_pct=overlap_pct, ignore_polarization=ignore_polarization,
+                                           stokes_mode=stokes_mode)
+            pred_dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
     else:
 
         pred_dataset = DynamicSpectrumDataset(mode=pmode, tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=fch1,
@@ -164,61 +180,127 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
             print(f"[\033[32mInfo\033[0m] Processing sample {idx + 1}/{pred_steps}")
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
             pred(dwtnet, data_mode='dbl', mode=pmode, data=batch, idx=idx, save_dir=pred_dir, device=device,
-                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k, score_thresh=score_thresh, )
+                 deocde_mode=dmode, save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k,
+                 score_thresh=score_thresh, )
             print("[\033[32mInfo\033[0m] Running UNet inference...")
             pred(unet, data_mode='dbl', mode=pmode, data=batch, idx=idx, save_dir=pred_dir, device=device,
-                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k, score_thresh=score_thresh, )
+                 deocde_mode=dmode, save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k,
+                 score_thresh=score_thresh, )
 
 
     elif mode == "pipeline":
         print("[\033[32mInfo\033[0m] Running pipeline processing mode")
-        obs_path = Path(obs_file_path)
-        if obs_path.is_dir():
-            file_list = sorted([f for f in obs_path.iterdir() if f.suffix in [".fil", ".h5"]])
-            if not file_list:
-                print(f"[\033[31mError\033[0m] No .fil or .h5 files found in directory: {obs_path}")
-            for idx, f in enumerate(file_list):
-                print(f"[\033[34mFile\033[0m] Processing file: {f}")
-                dataset = SETIWaterFullDataset(file_path=str(f), patch_t=patch_t, patch_f=patch_f,
-                                               overlap_pct=overlap_pct, device=device)
 
-                # Load model
-                model = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
-                if ui:
-                    app = QApplication(sys.argv)
-                    renderer = SETIWaterfallRenderer(dataset, model, device, log_dir=f.stem, drift=drift,
-                                                     snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
-                                                     verbose=verbose)
-                    renderer.setWindowTitle(f"SETI Waterfall Data Processor - {f.name}")
-                    renderer.show()
-                    if idx == len(file_list) - 1:
-                        sys.exit(app.exec_())
-                    else:
-                        app.exec_()
+        def match_polarization_files(files):
+            from collections import defaultdict
+            groups = defaultdict(list)
+            unmatched = []
+            for file_path in files:
+                # Extract base by removing _pol* part
+                stem = file_path.stem
+                if '_pol' in stem:
+                    base = stem.split('_pol')[0]
+                    groups[base].append(str(file_path))
                 else:
-                    print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
-                    processor = SETIPipelineProcessor(dataset, model, device, mode=pmode, log_dir=f.stem, drift=drift,
-                                                      snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
-                                                      verbose=verbose, nms_iou_thresh=iou_thresh,
-                                                      nms_score_thresh=score_thresh, nms_top_k=top_k)
-                    processor.process_all_patches()
+                    unmatched.append(str(file_path))
+            matched_groups = [group for group in groups.values() if len(group) > 1]
+            for base, group in groups.items():
+                if len(group) == 1:
+                    unmatched.extend(group)
+            return matched_groups, unmatched
+
+        all_files = []
+        if ignore_polarization:
+            # When True, handle polarization matching
+            if isinstance(obs_file_path, str) and Path(obs_file_path).is_file():
+                print(
+                    f"[\033[31mError\033[0m] When ignoring polarization, observation data cannot be a single file: {obs_file_path}")
+                sys.exit(1)  # Or raise error
+
+            print("[\033[32mInfo\033[0m] Ignoring polarization: matching files for intensity stacking")
+            if isinstance(obs_file_path, list) and len(obs_file_path) == 2:
+
+                # [XX_dir, YY_dir]
+                xx_dir = Path(obs_file_path[0])
+                yy_dir = Path(obs_file_path[1])
+                if not (xx_dir.is_dir() and yy_dir.is_dir()):
+                    print(
+                        f"[\033[31mError\033[0m] Both elements in observation data path must be directories when ignoring polarization: {obs_file_path}")
+                    sys.exit(1)
+
+                xx_files = sorted([f for f in xx_dir.iterdir() if f.suffix in [".fil", ".h5"]])
+                yy_files = sorted([f for f in yy_dir.iterdir() if f.suffix in [".fil", ".h5"]])
+
+                # Match by base name, assuming xx_files have _pol1, yy have _pol2
+                all_files = xx_files + yy_files
+
+            elif isinstance(obs_file_path, str) and Path(obs_file_path).is_dir():
+                # Single directory, collect all files
+                obs_path = Path(obs_file_path)
+                all_files = sorted([f for f in obs_path.iterdir() if f.suffix in [".fil", ".h5"]])
+            else:
+                print(
+                    f"[\033[31mError\033[0m] Invalid observation data path format: {obs_file_path}")
+                sys.exit(1)
+
+            if not all_files:
+                print(f"[\033[31mError\033[0m] No .fil or .h5 files found in provided paths: {obs_file_path}")
+                sys.exit(1)
+
+            file_groups, unmatched = match_polarization_files(all_files)
+            if unmatched:
+                print(
+                    f"[\033[33mWarning\033[0m] Unmatched files (not paired or no _pol* pattern): {', '.join(unmatched)}")
+            # file_list is now list of lists (groups)
+            file_list = file_groups  # Only process matched groups
 
         else:
-            dataset = SETIWaterFullDataset(file_path=obs_file_path, patch_t=patch_t, patch_f=patch_f,
-                                           overlap_pct=overlap_pct, device=device)
+            if isinstance(obs_file_path, list):
+                print(
+                    f"[\033[31mError\033[0m] When ignoring polarization, observation data path must be a file or directory, not a list: {obs_file_path}")
+                sys.exit(1)
+            obs_path = Path(obs_file_path)
+            if obs_path.is_dir():
+                file_list = sorted([f for f in obs_path.iterdir() if f.suffix in [".fil", ".h5"]])
+                if not file_list:
+                    print(f"[\033[31mError\033[0m] No .fil or .h5 files found in directory: {obs_path}")
+                    sys.exit(1)
+            else:
+                file_list = [obs_path]
+
+        for idx, f in enumerate(file_list):
+            # f could be Path or list[str]
+            if isinstance(f, list):
+                print(f"[\033[32mInfo\033[0m] Processing polarization group: {', '.join([Path(p).name for p in f])}")
+                file_path_for_dataset = f  # list[str]
+                f_log_dir = Path(f[0]).stem.split('_pol')[0]  # Use base name for log dir
+            else:
+                print(f"[\033[32mInfo\033[0m] Processing file: {f}")
+                file_path_for_dataset = str(f)
+                f_log_dir = f.stem
+            dataset = SETIWaterFullDataset(file_path=file_path_for_dataset, patch_t=patch_t, patch_f=patch_f,
+                                           overlap_pct=overlap_pct, device=device,
+                                           ignore_polarization=ignore_polarization, stokes_mode=stokes_mode)
+
+            # Load model
             model = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
 
             if ui:
                 app = QApplication(sys.argv)
-                renderer = SETIWaterfallRenderer(dataset, model, device, log_dir=file_stem, drift=drift,
+                renderer = SETIWaterfallRenderer(dataset, model, device, mode=pmode, log_dir=f_log_dir, drift=drift,
                                                  snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
-                                                 verbose=verbose)
-                renderer.setWindowTitle("SETI Waterfall Data Processor")
+                                                 verbose=verbose, nms_iou_thresh=iou_thresh,
+                                                 nms_score_thresh=score_thresh, nms_top_k=top_k)
+                renderer.setWindowTitle(f"SETI Waterfall Data Processor - {f_log_dir}")
                 renderer.show()
-                sys.exit(app.exec_())
+                if idx == len(file_list) - 1:
+                    sys.exit(app.exec_())
+                else:
+                    app.exec_()
+
             else:
                 print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
-                processor = SETIPipelineProcessor(dataset, model, device, mode=pmode, log_dir=file_stem, drift=drift,
+                processor = SETIPipelineProcessor(dataset, model, device, mode=pmode, log_dir=f_log_dir, drift=drift,
                                                   snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
                                                   verbose=verbose, nms_iou_thresh=iou_thresh,
                                                   nms_score_thresh=score_thresh, nms_top_k=top_k)
@@ -231,14 +313,16 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
         if execute0:
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
             dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
-            pred(dwtnet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
-                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k, score_thresh=score_thresh)
+            pred(dwtnet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, deocde_mode=dmode,
+                 max_steps=pred_steps, save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k,
+                 score_thresh=score_thresh)
         # --- 推理 UNet ---
         if execute1:
             print("[\033[32mInfo\033[0m] Running UNet inference...")
             unet = load_model(UNet, unet_ckpt, **unet_args)
-            pred(unet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
-                 save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k, score_thresh=score_thresh)
+            pred(unet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, deocde_mode=dmode,
+                 max_steps=pred_steps, save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k,
+                 score_thresh=score_thresh)
 
 
 if __name__ == "__main__":

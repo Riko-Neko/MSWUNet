@@ -133,7 +133,7 @@ if __name__ == "__main__":
     fname = "../../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil"
 
     ml_df = load_ML_dat(mlf)
-    dataset = SETIWaterFullDataset(file_path=fname, patch_t=16, patch_f=1024, overlap_pct=0.02)
+    dataset = SETIWaterFullDataset(file_path=fname, patch_t=116, patch_f=1024, overlap_pct=0.02)
 
     # visualize top-N
     # visualize_sort(ml_df, dataset, n=50, by='DriftRate', log_scale=False, save_dir=f'visual/{Path(fname).stem}/drift')

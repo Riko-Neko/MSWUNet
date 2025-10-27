@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import sys
-from blimpy import Waterfall
+
 import matplotlib
+from blimpy import Waterfall
+
 matplotlib.use('TkAgg')
 from matplotlib import pyplot as plt
-
 
 def print_info(wf: Waterfall):
     print("=== Waterfall.info() Output ===")
@@ -50,3 +51,21 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
+Kepler-438_M01 YY:
+python FILTERBANK_checker.py /media/rikoneko/c9f14f4a-975f-47f0-95c8-bb4804224489/yy/Kepler-438_M01_pol2.fil 1140.6035 1140.6045
+python data/FILTERBANK_checker.py data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil 1124.9355 1124.9375
+python data/FILTERBANK_checker.py data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil 1130.4087 1130.430
+python data/FILTERBANK_checker.py data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil 1125.0154 1125.017
+python data/FILTERBANK_checker.py data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil 1125.019 1125.023
+
+HD-180617_M04 XX:
+python FILTERBANK_checker.py /media/rikoneko/4c8904cd-457e-43a8-81d8-e3f5c0e60128/xx/HD-180617_M04_pol1.fil 1404.0496 1404.0504
+python data/FILTERBANK_checker.py ./data/33exoplanets/HD-180617_M04_pol1_f1400.00-1410.00.fil 1404.0496 1404.0573
+python data/FILTERBANK_checker.py ./data/33exoplanets/HD-180617_M04_pol1_f1400.00-1410.00.fil 1406.9505 1406.9515
+python data/FILTERBANK_checker.py ./data/33exoplanets/HD-180617_M04_pol1_f1400.00-1410.00.fil 1403.866 1403.867
+
+HD-218566_M01 YY:
+python FILTERBANK_checker.py /media/rikoneko/c9f14f4a-975f-47f0-95c8-bb4804224489/yy/HD-218566_M01_pol2.fil 1140.6035 1140.6045
+"""

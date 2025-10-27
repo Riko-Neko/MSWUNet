@@ -3,13 +3,13 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch 1.10+](https://img.shields.io/badge/PyTorch-1.10+-orange.svg)](https://pytorch.org)
 
-MultiDWTNet is a deep-learning project that implements **DWTNet**, a hybrid model tailored for dynamic-spectrum *
+Multi-Scale Wavelet U-Net (MSWUNet) is a deep-learning project that implements **MSWUNet**, a hybrid model tailored for dynamic-spectrum *
 *denoising** and **radio-frequency interference (RFI) detection**. By seamlessly combining 2-D Discrete Wavelet
-Transforms (DWT/IDWT) with Convolutional Neural Networks (CNNs), DWTNet captures and reconstructs multi-scale features
+Transforms (DWT/IDWT) with U-Net, MSWUNet captures and reconstructs multi-scale features
 from time–frequency data with exceptional fidelity.
 
 > ✅ **Link Status**: Repository successfully
-> resolved — [Riko-Neko/MultiDWTNet](https://github.com/Riko-Neko/MultiDWTNet).
+> resolved — [Riko-Neko/MSWUNet](https://github.com/Riko-Neko/MSWUNet).
 
 ---
 

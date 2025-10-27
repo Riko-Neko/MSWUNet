@@ -4,47 +4,132 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from utils.loss_func import _create_edge_weights
 
-def decode_F(raw: torch.Tensor, mode='soft', temp: float = 0.5) -> torch.Tensor:
+
+def decode_F(raw: torch.Tensor, mode='none', temp: float = 0.5, edge_factor: float = 1.0) -> torch.Tensor:
     """
-    Decode raw predictions for global normalized [0,1] f_start/f_stop with soft temporal aggregation.
+    Decode raw predictions for global normalized [0,1] f_start/f_stop with temporal aggregation.
 
     Args:
         raw: (B, P, 3, T, F) where 3=(f_start_logits, f_stop_logits, conf_logits)
-        mode: temporal aggregation options (must match loss mode)
-        temp: temperature for softmax temporal aggregation (matches soft mode in loss)
+        mode: temporal aggregation options ('soft', 'argmax', 'edge', 'edge_soft' or 'none')
+        temp: temperature for softmax temporal aggregation (used only in 'soft' mode)
+        edge_factor: controls steepness of edge weights (used only in 'edge_soft' mode)
 
     Returns:
         det_out: (B, N, 3) -> [f_start, f_stop, conf], normalized to [0,1]
-                 where N = F * P (time dimension aggregated via softmax)
+                 where N depends on mode:
+                 - 'soft'/'argmax'/'edge'/'edge_soft': N = F * P (time dimension aggregated)
+                 - 'none': N = T * F * P (time dimension preserved)
     """
     B, P, _, T, _F = raw.shape
     device = raw.device
     dtype = raw.dtype
 
-    # (B, T, F, P, 3)
-    r = raw.permute(0, 3, 4, 1, 2).contiguous()
+    if mode == 'none':
+        # No temporal aggregation - preserve time dimension
+        # (B, P, 3, T, F) -> (B, T, F, P, 3)
+        r = raw.permute(0, 3, 4, 1, 2).contiguous()
 
-    # extract channels
-    f_start = r[..., 0]  # (B, T, F, P)
-    f_stop = r[..., 1]
-    conf_logits = r[..., 2]
+        # extract channels
+        f_start = r[..., 0]  # (B, T, F, P)
+        f_stop = r[..., 1]
+        conf_logits = r[..., 2]
 
-    # soft temporal aggregation (matches soft mode in FreqDetectionLoss)
-    conf_weights = F.softmax(conf_logits / (temp + 1e-12), dim=1)  # (B, T, F, P)
+        # Flatten T, F, and P dims -> N = T * F * P
+        Ncells = T * _F * P
+        f_start = f_start.view(B, Ncells)  # (B, N)
+        f_stop = f_stop.view(B, Ncells)
+        conf = conf_logits.view(B, Ncells)
 
-    # weighted sum over time (dim=1)
-    f_start = (f_start * conf_weights).sum(dim=1)  # (B, F, P)
-    f_stop = (f_stop * conf_weights).sum(dim=1)  # (B, F, P)
-    conf = conf_logits.max(dim=1)[0]  # (B, F, P), max conf over time
+        det_out = torch.stack([f_start, f_stop, torch.sigmoid(conf)], dim=2)  # (B, N, 3)
+        return det_out
 
-    # flatten F and P dims -> N = F * P
+    elif mode == 'argmax':
+        # (B, P, 3, T, F) -> (B, T, F, P, 3)
+        r = raw.permute(0, 3, 4, 1, 2).contiguous()
+
+        # extract channels
+        f_start = r[..., 0]  # (B, T, F, P)
+        f_stop = r[..., 1]
+        conf_logits = r[..., 2]
+
+        # Pick argmax time index for each (B, F, P)
+        t_star = conf_logits.argmax(dim=1)  # (B, F, P)
+
+        # Gather predictions using argmax indices
+        b_idx = torch.arange(B, device=device)[:, None, None].expand(B, _F, P)
+        f_idx = torch.arange(_F, device=device)[None, :, None].expand(B, _F, P)
+        p_idx = torch.arange(P, device=device)[None, None, :].expand(B, _F, P)
+
+        f_start_agg = f_start[b_idx, t_star, f_idx, p_idx]  # (B, F, P)
+        f_stop_agg = f_stop[b_idx, t_star, f_idx, p_idx]  # (B, F, P)
+        conf = conf_logits[b_idx, t_star, f_idx, p_idx]  # (B, F, P)
+
+    elif mode == 'soft':
+        # (B, P, 3, T, F) -> (B, T, F, P, 3)
+        r = raw.permute(0, 3, 4, 1, 2).contiguous()
+
+        # extract channels
+        f_start = r[..., 0]  # (B, T, F, P)
+        f_stop = r[..., 1]
+        conf_logits = r[..., 2]
+
+        # soft temporal aggregation (matches soft mode in FreqDetectionLoss)
+        conf_weights = F.softmax(conf_logits / (temp + 1e-12), dim=1)  # (B, T, F, P)
+
+        # weighted sum over time (dim=1)
+        f_start_agg = (f_start * conf_weights).sum(dim=1)  # (B, F, P)
+        f_stop_agg = (f_stop * conf_weights).sum(dim=1)  # (B, F, P)
+        conf = conf_logits.max(dim=1)[0]  # (B, F, P), max conf over time
+
+    elif mode == 'edge':
+        # (B, P, 3, T, F) -> (B, T, F, P, 3)
+        r = raw.permute(0, 3, 4, 1, 2).contiguous()
+
+        # extract channels
+        f_start = r[..., 0]  # (B, T, F, P)
+        f_stop = r[..., 1]
+        conf_logits = r[..., 2]
+
+        # Use start from first time step and stop from last time step
+        f_start_agg = f_start[:, 0, :, :]  # (B, F, P) - 取第一个时间步
+        f_stop_agg = f_stop[:, -1, :, :]  # (B, F, P) - 取最后一个时间步
+        conf = conf_logits.max(dim=1)[0]  # (B, F, P), max conf over time
+
+    elif mode == 'edge_soft':
+        # (B, P, 3, T, F) -> (B, T, F, P, 3)
+        r = raw.permute(0, 3, 4, 1, 2).contiguous()
+
+        # extract channels
+        f_start = r[..., 0]  # (B, T, F, P)
+        f_stop = r[..., 1]
+        conf_logits = r[..., 2]
+
+        # Create edge-biased weights for start and stop predictions
+        start_weights = _create_edge_weights(edge_factor, T, device, mode='start')  # (T,)
+        stop_weights = _create_edge_weights(edge_factor, T, device, mode='stop')  # (T,)
+
+        # Expand to (1, T, 1, 1) for broadcasting to (B, T, F, P)
+        start_weights = start_weights.view(1, T, 1, 1)
+        stop_weights = stop_weights.view(1, T, 1, 1)
+
+        # Use start-biased weights for start predictions, stop-biased weights for stop predictions
+        f_start_agg = (f_start * start_weights).sum(dim=1)  # (B, F, P)
+        f_stop_agg = (f_stop * stop_weights).sum(dim=1)  # (B, F, P)
+        conf = conf_logits.max(dim=1)[0]  # (B, F, P), max conf over time
+
+    else:
+        raise ValueError(f"Unsupported mode: {mode}. Must be 'soft', 'argmax', 'edge', 'edge_soft' or 'none'")
+
+    # For 'argmax', 'soft', 'edge', and 'edge_soft' modes: flatten F and P dims -> N = F * P
     Ncells = _F * P
-    f_start = f_start.view(B, Ncells)  # (B, N)
-    f_stop = f_stop.view(B, Ncells)
-    conf = conf.view(B, Ncells)
+    f_start_flat = f_start_agg.view(B, Ncells)  # (B, N)
+    f_stop_flat = f_stop_agg.view(B, Ncells)
+    conf_flat = conf.view(B, Ncells)
 
-    det_out = torch.stack([f_start, f_stop, torch.sigmoid(conf)], dim=2)  # (B, N, 3)
+    det_out = torch.stack([f_start_flat, f_stop_flat, torch.sigmoid(conf_flat)], dim=2)  # (B, N, 3)
     return det_out
 
 

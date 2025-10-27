@@ -2,16 +2,19 @@ import os
 import sys
 from pathlib import Path
 
+from data_process.post_process.ML import load_ML_dat
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from data_process.post_process.T_SETI import load_seti_dat
 from external.Waterfall import Waterfall
 
 import matplotlib.pyplot as plt
 import torch
+from utils.det_utils import decode_F, nms_1d, plot_F_lines
 
 
-def model_crossover_val(wf, dat_df, hit_rows, model, device='cpu', fchans=1024, foff=None, save_dir="visual"):
+def model_crossover_val(wf, dat_df, hit_rows, model, device='cpu', fchans=1024, foff=None, save_dir="visual",
+                        mode='mask', nms_iou_thresh=0.5, nms_score_thresh=0.5, nms_top_k=10):
     """
     For a list of TurboSETI hits, grab the corresponding waterfall data,
     run through model, and plot original + denoised spectrum.
@@ -25,6 +28,10 @@ def model_crossover_val(wf, dat_df, hit_rows, model, device='cpu', fchans=1024, 
         fchans: number of frequency channels around the hit to extract
         foff: frequency resolution (MHz per channel)
         save_dir: directory to save plots
+        mode: 'mask' or 'detection' - operating mode
+        nms_iou_thresh: IoU threshold for detection mode NMS
+        nms_score_thresh: Confidence threshold for detection mode NMS
+        nms_top_k: Maximum number of detections to keep
     """
     save_path = Path(save_dir)
     save_path.mkdir(parents=True, exist_ok=True)
@@ -43,11 +50,13 @@ def model_crossover_val(wf, dat_df, hit_rows, model, device='cpu', fchans=1024, 
         half_bw = (np.float64(fchans) / np.float64(2)) * np.float64(abs(foff))
         f_start = f_center - half_bw
         f_stop = f_center + half_bw
+        print(f"[\033[32mInfo\033[0m] Extracting data for row {row.name} from {f_start:.6f} MHz to {f_stop:.6f} MHz")
+        # print(row)
 
         # grab waterfall data
         try:
             freqs, patch_data = wf.grab_data(f_start=f_start, f_stop=f_stop, device=device)
-            print(f"\033[32mInfo\033[0m] Grabbed data for row {row.name}: {patch_data.shape}")
+            print(f"[\033[32mInfo\033[0m] Grabbed data for row {row.name}: {patch_data.shape}")
             if patch_data.shape[1] != fchans:
                 patch_data = patch_data[:, :fchans]
                 freqs = freqs[:fchans]
@@ -61,11 +70,21 @@ def model_crossover_val(wf, dat_df, hit_rows, model, device='cpu', fchans=1024, 
             continue
 
         # 转为 tensor
+        mean = np.mean(patch_data)
+        std = np.std(patch_data)
+        if std < 1e-10:
+            std = 1.0
+        patch_data = (patch_data - mean) / std
         patch_tensor = torch.from_numpy(patch_data.astype(np.float32)).unsqueeze(0).unsqueeze(0).to(device)
 
         # 推理
         with torch.no_grad():
-            denoised, mask, logits = model(patch_tensor)
+            if mode == 'mask':
+                denoised, mask, logits = model(patch_tensor)
+                raw_preds = None
+            else:  # detection mode
+                denoised, raw_preds = model(patch_tensor)
+
             denoised_np = denoised.squeeze().cpu().numpy()
             patch_np = patch_tensor.squeeze().cpu().numpy()
 
@@ -93,11 +112,49 @@ def model_crossover_val(wf, dat_df, hit_rows, model, device='cpu', fchans=1024, 
                             cmap='viridis')
         axs[1].set_ylabel("Time bins", fontsize=label_font)
         axs[1].set_xlabel("Frequency (MHz)", fontsize=label_font)
-        axs[1].set_title(f"Denoised Spectrum\nRow {row.name}", fontsize=title_font)
+
+        if mode == 'detection':
+            axs[1].set_title(f"Denoised Spectrum (Detection Mode)\nRow {row.name}", fontsize=title_font)
+        else:
+            axs[1].set_title(f"Denoised Spectrum\nRow {row.name}", fontsize=title_font)
+
         fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04, label="Intensity")
 
+        # 在detection模式下绘制检测框
+        if mode == 'detection' and raw_preds is not None:
+            # 处理检测预测
+            det_outs = [decode_F(raw) for raw in raw_preds]  # List of (B, N_i, 3)
+            print(f"[\033[32mInfo\033[0m] Detected {len(det_outs[0][0])} candidates for row {row.name}")
+            det_out = torch.cat(det_outs, dim=1)  # (B, total_N, 3)
+
+            # 应用NMS
+            pred_boxes_list = nms_1d(det_out,
+                                     iou_thresh=nms_iou_thresh,
+                                     score_thresh=nms_score_thresh,
+                                     top_k=nms_top_k)
+
+            # 处理第一个batch的检测结果
+            pred_boxes = pred_boxes_list[0]  # (M, 3) - [f_start, f_stop, confidence]
+
+            if len(pred_boxes) > 0:
+                # 提取起始和结束频率（归一化）
+                f_starts = pred_boxes[:, 0].cpu().numpy()
+                f_stops = pred_boxes[:, 1].cpu().numpy()
+                confidences = pred_boxes[:, 2].cpu().numpy()
+
+                # 创建检测框元组用于绘图
+                pred_boxes_tuple = (len(f_starts), f_starts, f_stops)
+
+                # 使用plot_F_lines绘制检测框
+                plot_F_lines(axs[1], freqs, pred_boxes_tuple, normalized=True,
+                             color='red', linestyle='-', linewidth=1.5)
+
+                # 在标题中添加检测数量信息
+                axs[1].set_title(f"Denoised Spectrum (Detection Mode)\nRow {row.name} - {len(pred_boxes)} detections",
+                                 fontsize=title_font)
+
         # 保存
-        fname = save_path / f"row{row.name}_freq{f_center:.6f}.png"
+        fname = save_path / f"row{row.name}_freq{f_center:.6f}_{mode}.png"
         plt.savefig(fname, dpi=200)
         plt.close()
         print(f"Saved visualization for row {row.name} -> {fname}")
@@ -141,21 +198,50 @@ if __name__ == '__main__':
         print(f"\n[\033[32mInfo\033[0m] Using device: {device}")
 
         # Checkpoint paths
-        dwtnet_ckpt = Path("../../checkpoints/dwtnet") / "best_model.pth"
+        # dwtnet_ckpt = Path("../../checkpoints/dwtnet") / "best_model.pth"
+        dwtnet_ckpt = Path("../../archived/weights/20250925_33e_det_realbk.pth")
 
         from model.DWTNet import DWTNet
 
-        model = load_model(DWTNet, dwtnet_ckpt, device=device, in_chans=1, dim=64, levels=[2, 4, 8, 16],
-                           wavelet_name='db4')
+        dwtnet_args = dict(
+            in_chans=1,
+            dim=64,
+            levels=[2, 4, 8, 16],
+            wavelet_name='db4',
+            extension_mode='periodization',
+            P=2,
+            use_spp=True,
+            use_pan=True)
 
+        model = load_model(DWTNet, dwtnet_ckpt, device=device, **dwtnet_args)
+
+        mlf = '../../pipeline/log/Kepler-438_M01_pol2_f1120.00-1150.00/hits_20250925_003211.dat'
+        # mlf = '../../pipeline/log/HD-180617_M04_pol1_f1400.00-1410.00/hits_20250925_001650.dat'
         setif = '../test_out/truboseti_blis692ns/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.dat'
         # fname = "../../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil"
-        fname = "../../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
+        # fname = "../../data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
+        fname = '../../data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil'
+        # fname = '../../data/33exoplanets/HD-180617_M04_pol1_f1400.00-1410.00.fil'
 
         wf = Waterfall(fname, load_data=True)
 
-        dat_df = load_seti_dat(setif)
+        # dat_df = load_seti_dat(setif)
+        dat_df = load_ML_dat(mlf, mode='detection')
 
-        hit_rows = [729, 768, 808, 839, 861]
+        # hit_rows = [729, 768, 808, 839, 861]
+
+        # For ML pipeline rows: real row -2
+        # hit_rows = [24]
+        # hit_rows = [16]
+        # hit_rows = list(range(25))  # -1 for list operation
+        # hit_rows = list(range(60))
+        hit_rows = [10, 18, 25, 29, 32, 33, 34, 35, 36, 37, 43, 44, 45, 46, 47, 51]
+
+        # # 运行mask模式
+        # model_crossover_val(wf, dat_df, hit_rows, model, device=device, fchans=1024, foff=wf.header["foff"],
+        #                     save_dir=f'visual/{Path(fname).stem}/cross', mode='mask')
+
+        # 运行detection模式
         model_crossover_val(wf, dat_df, hit_rows, model, device=device, fchans=1024, foff=wf.header["foff"],
-                            save_dir=f'visual/{Path(fname).stem}/cross')
+                            save_dir=f'visual/{Path(fname).stem}/cross', mode='detection', nms_iou_thresh=0.1,
+                            nms_score_thresh=0.99, nms_top_k=2)

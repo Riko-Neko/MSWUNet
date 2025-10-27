@@ -17,4 +17,4 @@ checkpoints/*/*.pth
 # dev
 model/DWTNet.py
 model/DenseDWTNet.py
-model/DWTNet-base.py
+model/DetDWTNet.py

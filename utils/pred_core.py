@@ -88,8 +88,8 @@ def _process_batch_core(model, batch, device, mode):
     }
 
 
-def _save_batch_results(results, idx, save_dir, model_class_name, mode='detection', save_npy=False, plot=True,
-                        **nms_kwargs):
+def _save_batch_results(results, idx, save_dir, model_class_name, mode='detection', deocde_mode='soft', save_npy=False,
+                        plot=True, **nms_kwargs):
     """
     Save and visualize results for a single batch
 
@@ -173,7 +173,7 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
             # Process predictions
             pred_boxes = None
             if results["raw_preds"] is not None:
-                det_outs = [decode_F(raw) for raw in results["raw_preds"]]  # List of (B, N_i, 3)
+                det_outs = [decode_F(raw, mode=deocde_mode) for raw in results["raw_preds"]]  # List of (B, N_i, 3)
                 det_out = torch.cat(det_outs, dim=1)  # (B, total_N, 3)
                 pred_boxes_list = nms_1d(det_out, **nms_kwargs)  # 一次性 NMS
                 pred_boxes = pred_boxes_list[0]  # Assuming B=1, (M, 3)
@@ -233,6 +233,7 @@ def pred(model: torch.nn.Module,
          device: torch.device,
          mode: str = 'detection',
          data_mode: str = "dataloader",
+         deocde_mode: str = 'soft',
          max_steps: Optional[int] = None,
          idx: Optional[int] = None,
          save_npy: bool = True,
@@ -250,6 +251,10 @@ def pred(model: torch.nn.Module,
         data_mode: Processing mode:
               "dbl" for batch mode (process single batch),
               otherwise dataloader mode (process entire dataloader)
+        deocde_mode: Decoding mode:
+              "soft" for soft decoding,
+              "argmax" for argmax decoding,
+              "none" for traditional decoding,
         max_steps: For dataloader mode, maximum number of batches to process
         idx: For batch mode, batch index (for filenames)
         save_npy: Whether to save numpy outputs
@@ -268,7 +273,8 @@ def pred(model: torch.nn.Module,
 
             # Process single batch
             results = _process_batch_core(model, data, device, mode)
-            _save_batch_results(results, idx, save_dir, model.__class__.__name__, mode, save_npy, plot, **nms_kwargs)
+            _save_batch_results(results, idx, save_dir, model.__class__.__name__, mode, deocde_mode, save_npy, plot,
+                                **nms_kwargs)
 
         else:  # Dataloader processing mode
             if max_steps is None:
@@ -280,5 +286,5 @@ def pred(model: torch.nn.Module,
                     break
 
                 results = _process_batch_core(model, batch, device, mode)
-                _save_batch_results(results, batch_idx, save_dir, model.__class__.__name__, mode, save_npy, plot,
-                                    **nms_kwargs)
+                _save_batch_results(results, batch_idx, save_dir, model.__class__.__name__, mode, deocde_mode, save_npy,
+                                    plot, **nms_kwargs)

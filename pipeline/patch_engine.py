@@ -22,33 +22,63 @@ else:  # Linux
 
 
 class SETIWaterFullDataset(Dataset):
-    def __init__(self, file_path, patch_t, patch_f, overlap_pct=0.02, device="cpu"):
-        self.obs = Waterfall(file_path, load_data=True)  # Load is a MUST
+    def __init__(self, file_path, patch_t, patch_f, overlap_pct=0.02,
+                 device="cpu", ignore_polarization=False, stokes_mode="I"):
+        """
+        A dataset class that extracts time-frequency patches from SETI filterbank files (.fil),
+        optionally combining multiple polarization files into Stokes parameters.
+
+        Args:
+            file_path (str | list[str]): Single file path or a list of polarization file paths.
+            patch_t (int): Patch size along the time axis.
+            patch_f (int): Patch size along the frequency axis.
+            overlap_pct (float): Overlap ratio between adjacent patches.
+            device (str): Device used when grabbing data ("cpu" or "cuda").
+            ignore_polarization (bool):
+                If True, combines polarization data according to stokes_mode (default: "I").
+            stokes_mode (str):
+                "I" → total intensity (XX + YY)
+                "Q" → linear polarization difference (XX − YY)
+                (reserved for "U", "V" in future)
+        """
         self.device = device
-        # obs.data_shape is (tchans, n_pols, fchans)
+        self.ignore_polarization = ignore_polarization
+        self.stokes_mode = stokes_mode.upper()
+
+        if ignore_polarization:
+            assert isinstance(file_path, (list, tuple)) and len(file_path) >= 2, \
+                "When ignore_polarization=True, file_path must be a list of .fil files (e.g., ['xx_pol0.fil', 'xx_pol1.fil'])."
+            # Ensure filenames differ only by polarization suffix
+            base_names = [f.replace("_pol0", "").replace("_pol1", "").replace("_pol2", "").replace("_pol3", "")
+                          for f in file_path]
+            assert len(set(base_names)) == 1, \
+                "All polarization files must have identical names except for the 'pol' part."
+            self.obs_list = [Waterfall(fp, load_data=True) for fp in file_path]
+            self.obs = self.obs_list[0]  # Reference polarization
+        else:
+            self.obs = Waterfall(file_path, load_data=True)
+            self.obs_list = [self.obs]
+
         self.tchans = self.obs.selection_shape[0]
         self.fchans = self.obs.selection_shape[2]
         self.freqs = self.obs.get_freqs()
-        assert patch_t <= self.tchans, "patch_t larger than tchans"
-        assert patch_f <= self.fchans, "patch_f larger than fchans"
+
+        assert patch_t <= self.tchans, "patch_t larger than available time channels."
+        assert patch_f <= self.fchans, "patch_f larger than available frequency channels."
 
         overlap_t = round(patch_t * overlap_pct)
         stride_t = patch_t - overlap_t
         overlap_f = round(patch_f * overlap_pct)
         stride_f = patch_f - overlap_f
 
-        # Calculate time dimension's starting index
-        start_t_list = list(range(0, self.tchans - patch_t + 1, stride_t))
-        if start_t_list and start_t_list[-1] + patch_t < self.tchans:
-            start_t_list.append(self.tchans - patch_t)
+        self.start_t_list = list(range(0, self.tchans - patch_t + 1, stride_t))
+        if self.start_t_list and self.start_t_list[-1] + patch_t < self.tchans:
+            self.start_t_list.append(self.tchans - patch_t)
 
-        # Calculate frequency dimension's starting index
-        start_f_list = list(range(0, self.fchans - patch_f + 1, stride_f))
-        if start_f_list and start_f_list[-1] + patch_f < self.fchans:
-            start_f_list.append(self.fchans - patch_f)
+        self.start_f_list = list(range(0, self.fchans - patch_f + 1, stride_f))
+        if self.start_f_list and self.start_f_list[-1] + patch_f < self.fchans:
+            self.start_f_list.append(self.fchans - patch_f)
 
-        self.start_t_list = start_t_list
-        self.start_f_list = start_f_list
         self.patch_t = patch_t
         self.patch_f = patch_f
 
@@ -63,54 +93,58 @@ class SETIWaterFullDataset(Dataset):
         end_t = start_t + self.patch_t
         end_f = start_f + self.patch_f
 
-        # Calculate frequency range
-        if self.freqs[0] < self.freqs[-1]:  # ⬆️
-            f_start = self.freqs[start_f]
-            f_stop = self.freqs[end_f - 1]
-        else:  # ⬇️
-            f_start = self.freqs[end_f - 1]
-            f_stop = self.freqs[start_f]
+        # Determine frequency range
+        if self.freqs[0] < self.freqs[-1]:
+            f_start, f_stop = self.freqs[start_f], self.freqs[end_f - 1]
+        else:
+            f_start, f_stop = self.freqs[end_f - 1], self.freqs[start_f]
 
-        # Load data
-        # print("[\033[33mDebug\033[0m] Grabbing data...")
-        try:
-            patch_freqs, data = self.obs.grab_data(f_start, f_stop, start_t, end_t, device=self.device)
-        except TypeError as e:
-            print(f"[\033[31mError\033[0m] Got unexpected parameter: {e}")
-            patch_freqs, data = self.obs.grab_data(f_start, f_stop, start_t, end_t)
+        # Combine polarizations if required
+        if self.ignore_polarization:
+            assert len(self.obs_list) >= 2, "At least two polarization files are required for Stokes combination."
+            try:
+                _, data_xx = self.obs_list[0].grab_data(f_start, f_stop, start_t, end_t, device=self.device)
+                _, data_yy = self.obs_list[1].grab_data(f_start, f_stop, start_t, end_t, device=self.device)
+            except TypeError:
+                _, data_xx = self.obs_list[0].grab_data(f_start, f_stop, start_t, end_t)
+                _, data_yy = self.obs_list[1].grab_data(f_start, f_stop, start_t, end_t)
+
+            if self.stokes_mode == "I":
+                data = data_xx + data_yy
+            elif self.stokes_mode == "Q":
+                data = data_xx - data_yy
+            else:
+                raise NotImplementedError(f"Stokes mode '{self.stokes_mode}' not supported yet.")
+        else:
+            try:
+                _, data = self.obs.grab_data(f_start, f_stop, start_t, end_t, device=self.device)
+            except TypeError:
+                _, data = self.obs.grab_data(f_start, f_stop, start_t, end_t)
 
         # Normalize
-        # print("[\033[33mDebug\033[0m] Normalizing data...")
         mean = np.mean(data)
         std = np.std(data)
         if std < 1e-10:
             std = 1.0
         data = (data - mean) / std
 
-        # To tensor
-        patch_tensor = torch.from_numpy(data).float().unsqueeze(0)  # (1, patch_t, patch_f)
-        # print("[\033[33mDebug\033[0m] Data shape:", patch_tensor.shape)
-
+        # Convert to tensor
+        patch_tensor = torch.from_numpy(data).float().unsqueeze(0)
         return patch_tensor, (start_t, start_f)
 
     def get_patch(self, row, col):
+        """Get a patch tensor and its corresponding frequency/time range."""
         index = row * len(self.start_f_list) + col
         patch_tensor, (start_t, start_f) = self.__getitem__(index)
         end_t = start_t + self.patch_t
         end_f = start_f + self.patch_f
 
-        if self.freqs[0] < self.freqs[-1]:  # Ascending
-            f_min = self.freqs[start_f]
-            f_max = self.freqs[end_f - 1]
-        else:  # Descending
-            f_min = self.freqs[end_f - 1]
-            f_max = self.freqs[start_f]
+        if self.freqs[0] < self.freqs[-1]:
+            f_min, f_max = self.freqs[start_f], self.freqs[end_f - 1]
+        else:
+            f_min, f_max = self.freqs[end_f - 1], self.freqs[start_f]
 
-        freq_range = (f_min, f_max)
-        time_range = (start_t, end_t)
-
-        return patch_tensor, freq_range, time_range
-
+        return patch_tensor, (f_min, f_max), (start_t, end_t)
 
 def plot_dataset_item(dataset, index=0, cmap='viridis', log_scale=False):
     """

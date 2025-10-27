@@ -32,7 +32,7 @@ Design notes:
 
 
 def _valid_gt_mask(gt_starts: torch.Tensor, gt_stops: torch.Tensor) -> torch.Tensor:
-    """Return boolean mask of valid GTs (start < stop and finite and in range)."""
+    """Return boolean mask of valid GTs (finite and in range)."""
     valid = torch.isfinite(gt_starts) & torch.isfinite(gt_stops)
     return valid
 
@@ -141,6 +141,41 @@ def build_targets_freq_vectorized_with_time(gt_boxes: torch.Tensor, P: int, T: i
     return targets_time, pos_mask_time, n_pos
 
 
+def _create_edge_weights(edge_factor, T: int, device: torch.device, mode: str = 'start') -> torch.Tensor:
+    """
+    Create edge-biased weights for time dimension.
+    Weights are higher at the edges (first and last time steps) and lower in the middle.
+    edge_factor controls the steepness: higher values -> more concentration at edges.
+
+    Args:
+        edge_factor: Controls steepness of edge weights
+        T: Number of time steps
+        device: Device to create tensor on
+        mode: 'start' for weights biased towards beginning, 'stop' for weights biased towards end
+    """
+    if T == 1:
+        return torch.ones(1, device=device)
+
+    # Create time indices
+    t = torch.arange(T, device=device, dtype=torch.float32)
+    # Normalize to [0, 1]
+    t_norm = t / (T - 1) if T > 1 else t
+
+    if mode == 'start':
+        # For start predictions: higher weights at the beginning (T=0)
+        # Using a decreasing function from 1 to 0
+        weights = 1.0 - torch.sigmoid(edge_factor * (t_norm - 0.5) * 10)
+    else:  # mode == 'stop'
+        # For stop predictions: higher weights at the end (T=T-1)
+        # Using an increasing function from 0 to 1
+        weights = torch.sigmoid(edge_factor * (t_norm - 0.5) * 10)
+
+    # Normalize to sum to 1
+    weights = weights / weights.sum()
+
+    return weights  # shape: (T,)
+
+
 class FreqDetectionLoss(nn.Module):
     """
     Loss supporting both time-duplicated targets and aggregated-time training.
@@ -151,16 +186,21 @@ class FreqDetectionLoss(nn.Module):
                 produce weighted-regression predictions (differentiable).
       - 'argmax': Pick the time index with largest confidence logit and use its regression
                   predictions (sparse gradients; non-smooth).
+      - 'edge_soft': Similar to 'soft' but with higher weights at the edges of time dimension,
+                     controlled by edge_factor parameter.
+      - 'edge': Directly use values from both ends of time dimension (first and last time steps).
 
     Additional parameters:
       - reg_loss_type: Type of regression loss ('smoothl1' (default) or 'mse')
       - temp: Temperature parameter for softmax when temporal_agg == 'soft'
+      - edge_factor: Controls steepness of edge weights when temporal_agg == 'edge_soft'
     """
 
     def __init__(self, P: int, lambda_coord: float = 5.0, noobj_weight: float = 0.5, temporal_agg: str = 'soft',
-                 reg_loss_type: str = 'smoothl1', temp: float = 1.0, device: Optional[torch.device] = None):
+                 reg_loss_type: str = 'smoothl1', temp: float = 1.0, edge_factor: float = 1.0,
+                 device: Optional[torch.device] = None):
         super().__init__()
-        assert temporal_agg in ('soft', 'argmax', 'none')
+        assert temporal_agg in ('soft', 'argmax', 'none', 'edge_soft', 'edge')  # 添加新模式
         assert reg_loss_type in ('smoothl1', 'mse')
         self.P = P
         self.lambda_coord = float(lambda_coord)
@@ -168,6 +208,7 @@ class FreqDetectionLoss(nn.Module):
         self.temporal_agg = temporal_agg
         self.reg_loss_type = reg_loss_type
         self.temp = float(temp)
+        self.edge_factor = float(edge_factor)  # 控制边缘权重的陡峭度
         self.device = device
         self.gt_norm = None
 
@@ -256,6 +297,20 @@ class FreqDetectionLoss(nn.Module):
                 f_idx = torch.arange(_F, device=self.device)[None, None, :].expand(B, self.P, _F)
                 pred_start_agg = pred_start[b_idx, p_idx, t_star, f_idx]
                 pred_stop_agg = pred_stop[b_idx, p_idx, t_star, f_idx]
+            elif self.temporal_agg == 'edge_soft':
+                # 'edge_soft' aggregation: use different edge-biased weights for start and stop
+                start_weights = _create_edge_weights(self.edge_factor, T, self.device, mode='start')  # (T,)
+                stop_weights = _create_edge_weights(self.edge_factor, self.device, mode='stop')  # (T,)
+                # Expand to (1,1,T,1) for broadcasting to (B,P,T,F)
+                start_weights = start_weights.view(1, 1, T, 1)
+                stop_weights = stop_weights.view(1, 1, T, 1)
+                # Use start-biased weights for start predictions, stop-biased weights for stop predictions
+                pred_start_agg = (pred_start * start_weights).sum(dim=2)  # (B,P,F)
+                pred_stop_agg = (pred_stop * stop_weights).sum(dim=2)  # (B,P,F)
+            elif self.temporal_agg == 'edge':
+                # 'edge' aggregation: use start from first time step and stop from last time step
+                pred_start_agg = pred_start[:, :, 0, :]  # (B,P,F) - first time step
+                pred_stop_agg = pred_stop[:, :, -1, :]  # (B,P,F) - last time step
             else:
                 # 'soft' aggregation (differentiable) with temperature
                 if self.temp <= 0.0:
