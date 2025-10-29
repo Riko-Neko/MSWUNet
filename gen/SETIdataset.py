@@ -95,12 +95,16 @@ class DynamicSpectrumDataset(Dataset):
         for i in range(n_signals):
             # 随机路径类型
             path_type = random.choices(['constant', 'sine', 'squared', 'rfi'],
-                                       weights=[0.4, 0.2, 0.4, 0.])[0]
+                                       weights=[0.5, 0.2, 0.3, 0.])[0]
             # 默认信号参数
             margin = int(0.2 * self.fchans)
             # 随机漂移率，确保绝对值不低于 drift_min_abs
             while True:
-                drift_rate = random.uniform(self.drift_min, self.drift_max)
+                # drift_rate = random.uniform(self.drift_min, self.drift_max)
+                # 使用 Beta 分布采样，α=β=6 => 两端概率极低
+                x = random.betavariate(6, 6)
+                drift_rate = self.drift_min + x * (self.drift_max - self.drift_min)
+                # !!⚠️ 较大的 drift rate 在轨迹为抛物线时可能出现类似直线但是无法标记为 candidate 的情况
                 if abs(drift_rate) >= self.drift_min_abs:
                     break
             if drift_rate < 0:
@@ -227,12 +231,37 @@ class DynamicSpectrumDataset(Dataset):
         if self.mode == 'mask' or self.mode == 'test':
             rfi_mask = rfi_mask.astype(np.float32)[np.newaxis, :, :]
 
-        if self.mode == 'detection':
+        if self.mode == 'yolo':
+            N, classes, f_starts, f_stops = freq_info if freq_info else (0, [], [], [])
+            gt_boxes = torch.full((self.max_num_signals, 5), float('nan'), dtype=torch.float32)
+            if N > 0:
+                t_start, t_stop = 0.0, float(self.tchans - 1)
+                t_center = (t_start + t_stop) / 2.0
+                t_width = t_stop - t_start
+                f_starts = torch.tensor(f_starts, dtype=torch.float32)
+                f_stops = torch.tensor(f_stops, dtype=torch.float32)
+                f_center = (f_starts + f_stops) / 2.0
+                f_width = f_stops - f_starts
+                t_center /= (self.tchans - 1)
+                t_width /= (self.tchans - 1)
+                f_center /= (self.fchans - 1)
+                f_width /= (self.fchans - 1)
+
+                classes = torch.tensor(classes, dtype=torch.float32)
+
+                # YOLO format: [class_id, x_center, y_center, width, height]
+                gt_boxes[:N, 0] = torch.clamp(classes, 0.0, 1.0)
+                gt_boxes[:N, 1] = torch.clamp(t_center, 0.0, 1.0)
+                gt_boxes[:N, 2] = torch.clamp(f_center, 0.0, 1.0)
+                gt_boxes[:N, 3] = torch.clamp(t_width, 0.0, 1.0)
+                gt_boxes[:N, 4] = torch.clamp(f_width, 0.0, 1.0)
+            return noisy_spec, clean_spec, gt_boxes
+        elif self.mode == 'detection':
             N, f_starts, f_stops = freq_info if freq_info else (0, [], [])
             gt_boxes = torch.full((self.max_num_signals, 2), float('nan'), dtype=torch.float32)
             if N > 0:
-                starts_norm = torch.tensor(f_starts, dtype=torch.float32) / (self.fchans - 1)
-                stops_norm = torch.tensor(f_stops, dtype=torch.float32) / (self.fchans - 1)
+                starts_norm = torch.tensor(f_starts, dtype=torch.float64) / (self.fchans - 1)
+                stops_norm = torch.tensor(f_stops, dtype=torch.float64) / (self.fchans - 1)
                 gt_boxes[:N, 0] = torch.clamp(starts_norm, 0.0, 1.0)
                 gt_boxes[:N, 1] = torch.clamp(stops_norm, 0.0, 1.0)
             return noisy_spec, clean_spec, gt_boxes
@@ -449,6 +478,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    plot_samples(dataset, kind='clean', num=100, with_spectrum=False, spectrum_type='fft2d')
+    plot_samples(dataset, kind='clean', num=30, with_spectrum=False, spectrum_type='fft2d')
     # plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
     # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)

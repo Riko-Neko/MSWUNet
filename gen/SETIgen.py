@@ -151,6 +151,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
     # 注入信号
     f_starts = []
     f_stops = []
+    classes = []
     level = frame.get_intensity(random.uniform(10, 20))
     if signals:
         for sig in signals:
@@ -165,7 +166,6 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             # 漂移率
             drift = sig.get('drift_rate', 0.0)
             drift = (drift * u.Hz / u.s) if not isinstance(drift, u.Quantity) else drift
-            print(drift)
             # 强度
             if 'snr' in sig:
                 level = frame.get_intensity(sig['snr'])
@@ -187,6 +187,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             elif path_type == 'squared':
                 squared_drift = sig.get('squared_drift', drift)
                 path = stg.squared_path(f_start=f_start, drift_rate=squared_drift)
+                low_squared_drift = True if abs(squared_drift) < 1.e-4 else False
             elif path_type == 'rfi':
                 spread = sig.get('spread', 0.0) * u.Hz
                 spread_type = sig.get('spread_type', 'uniform')
@@ -237,6 +238,11 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             f_stop = frame.get_index(path(frame.ts[tchans - 1]))
             f_starts.append(f_start)
             f_stops.append(f_stop)
+
+            if path_type == 'constant' or low_squared_drift == True:
+                classes.append(1.)
+            else:
+                classes.append(0.)
 
     signal_spec = frame.get_data(db=False).copy()
 
@@ -327,11 +333,11 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             plt.savefig(out_path, dpi=480)
             print(f"Plot saved to {out_path}")
     if mode == 'detection':
-        return signal_spec, clean_spec, noisy_spec, (len(f_starts), f_starts, f_stops)
+        return signal_spec, clean_spec, noisy_spec, (len(f_starts), classes, f_starts, f_stops)
     elif mode == 'mask':
         return signal_spec, clean_spec, noisy_spec, rfi_mask
     else:
-        return signal_spec, clean_spec, noisy_spec, rfi_mask, (len(f_starts), f_starts, f_stops)
+        return signal_spec, clean_spec, noisy_spec, rfi_mask, (len(f_starts), classes, f_starts, f_stops)
 
 
 if __name__ == "__main__":

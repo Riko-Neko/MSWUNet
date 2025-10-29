@@ -3,7 +3,6 @@ from typing import Optional, List
 import numpy as np
 import torch
 import torch.nn.functional as F
-
 from utils.loss_func import _create_edge_weights
 
 
@@ -219,25 +218,35 @@ def nms_1d(det_out: torch.Tensor, iou_thresh: float = 0.5, top_k: Optional[int] 
     return results
 
 
-def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color='red', linestyle='--', linewidth=0.5):
+def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'], linestyle='--', linewidth=0.5):
     """
     Plot detected frequency intervals as vertical lines on a 1D frequency plot.
 
     Args:
         ax (matplotlib.axes.Axes): The axis to plot on.
         freqs (array-like): Array of frequency values.
-        pred_boxes (tuple): (N, f_starts, f_stops)
+        pred_boxes (tuple): (N, classes, f_starts, f_stops)
             - N: number of intervals
+            - classes: list/array of class ids (0 or 1)
             - f_starts: list/array of start indices (or normalized [0,1] values)
             - f_stops: list/array of stop indices (or normalized [0,1] values)
         normalized (bool): Whether the boxes are normalized to [0, 1].
-        color (str): Color of the lines.
+        color (str | list[str]): Either a single color string (e.g., 'red')
+                                 or a list of two colors [color_class0, color_class1].
         linestyle (str): Line style.
         linewidth (float): Line width.
     """
-    N, f_starts, f_stops = pred_boxes
+    N, classes, f_starts, f_stops = pred_boxes
     if N == 0:
         return
+
+    # --- 统一颜色配置 ---
+    if isinstance(color, str):
+        colors = [color, color]
+    elif isinstance(color, (list, tuple)) and len(color) == 2:
+        colors = list(color)
+    else:
+        raise ValueError("`color` must be a string or a list/tuple of two color strings.")
 
     def to_numpy(x):
         if isinstance(x, list):
@@ -248,6 +257,7 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color='red', linestyle=
         else:
             return np.asarray(x)
 
+    classes = to_numpy(classes)
     f_starts = to_numpy(f_starts)
     f_stops = to_numpy(f_stops)
 
@@ -261,6 +271,7 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color='red', linestyle=
 
     f_starts = f_starts[valid_mask]
     f_stops = f_stops[valid_mask]
+    classes = classes[valid_mask]
     N_valid = len(f_starts)
     if N_valid == 0:
         print(f"[\033[33mWarn\033[0m] No valid boxes after filtering in plot_F_lines")
@@ -273,6 +284,7 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color='red', linestyle=
         f_starts = f_starts.astype(int)
         f_stops = f_stops.astype(int)
 
-    for f_start, f_stop in zip(f_starts, f_stops):
-        ax.axvline(freqs[f_start], color=color, linestyle=linestyle, linewidth=linewidth)
-        ax.axvline(freqs[f_stop], color=color, linestyle=linestyle, linewidth=linewidth)
+    for cls, f_start, f_stop in zip(classes, f_starts, f_stops):
+        col = colors[int(cls)] if int(cls) < len(colors) else colors[0]
+        ax.axvline(freqs[f_start], color=col, linestyle=linestyle, linewidth=linewidth)
+        ax.axvline(freqs[f_stop], color=col, linestyle=linestyle, linewidth=linewidth)
