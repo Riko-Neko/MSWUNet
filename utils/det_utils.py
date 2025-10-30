@@ -243,7 +243,7 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'],
         N, f_starts, f_stops = pred_boxes
         classes = np.ones_like(f_starts, dtype=int)
     else:
-        raise ValueError(f"Invalid pred_boxes format: {pred_boxes}")
+        raise ValueError(f"[\033[31mError\033[0m] Invalid pred_boxes format: {pred_boxes}")
 
     if N == 0:
         return
@@ -254,7 +254,7 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'],
     elif isinstance(color, (list, tuple)) and len(color) == 2:
         colors = list(color)
     else:
-        raise ValueError("`color` must be a string or a list/tuple of two color strings.")
+        raise ValueError("[\033[31mError\033[0m] `color` must be a string or a list/tuple of two color strings.")
 
     def to_numpy(x):
         if isinstance(x, list):
