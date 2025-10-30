@@ -257,7 +257,7 @@ class DynamicSpectrumDataset(Dataset):
                 gt_boxes[:N, 4] = torch.clamp(f_width, 0.0, 1.0)
             return noisy_spec, clean_spec, gt_boxes
         elif self.mode == 'detection':
-            N, f_starts, f_stops = freq_info if freq_info else (0, [], [])
+            N, _, f_starts, f_stops = freq_info if freq_info else (0, [], [])
             gt_boxes = torch.full((self.max_num_signals, 2), float('nan'), dtype=torch.float32)
             if N > 0:
                 starts_norm = torch.tensor(f_starts, dtype=torch.float64) / (self.fchans - 1)

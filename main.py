@@ -55,7 +55,7 @@ snr_min = 15.0
 snr_max = 25.0
 width_min = 10
 width_max = 30
-num_signals = (1, 1)
+num_signals = (0, 2)
 noise_std_min = 0.025
 noise_std_max = 0.05
 noise_mean_min = 2
@@ -150,7 +150,7 @@ def main():
     criterion = DetectionCombinedLoss(P=P, lambda_denoise=1, loss_type='mse', avg_time=False, lambda_learnable=False,
                                       device=device, detection_loss_kwargs={'lambda_coord': 5.0,
                                                                             'noobj_weight': 0.5,
-                                                                            'temporal_agg': 'soft',
+                                                                            'temporal_agg': 'edge',
                                                                             'reg_loss_type': 'smoothl1',
                                                                             'temp': 0.5})
 

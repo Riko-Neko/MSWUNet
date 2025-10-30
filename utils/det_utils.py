@@ -3,6 +3,7 @@ from typing import Optional, List
 import numpy as np
 import torch
 import torch.nn.functional as F
+
 from utils.loss_func import _create_edge_weights
 
 
@@ -236,7 +237,14 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'],
         linestyle (str): Line style.
         linewidth (float): Line width.
     """
-    N, classes, f_starts, f_stops = pred_boxes
+    if len(pred_boxes) == 4:
+        N, classes, f_starts, f_stops = pred_boxes
+    elif len(pred_boxes) == 3:
+        N, f_starts, f_stops = pred_boxes
+        classes = np.ones_like(f_starts, dtype=int)
+    else:
+        raise ValueError(f"Invalid pred_boxes format: {pred_boxes}")
+
     if N == 0:
         return
 

@@ -75,8 +75,8 @@ unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 P = 2
 
 # NMS config
-iou_thresh = 0.1
-score_thresh = 0.99
+iou_thresh = 0.99
+score_thresh = 0.1
 top_k = None
 
 # hits conf info

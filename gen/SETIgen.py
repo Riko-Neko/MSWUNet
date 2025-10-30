@@ -116,7 +116,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
                 }
             ]
     """
-    if mode not in ['detection', 'mask', 'test']:
+    if mode not in ['detection', 'mask', 'test', 'yolo']:
         raise ValueError('mode must be detection, mask or test')
 
     # 固定随机种子
@@ -152,6 +152,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
     f_starts = []
     f_stops = []
     classes = []
+    low_squared_drift = False
     level = frame.get_intensity(random.uniform(10, 20))
     if signals:
         for sig in signals:
