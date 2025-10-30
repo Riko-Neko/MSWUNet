@@ -69,6 +69,8 @@ class DynamicSpectrumDataset(Dataset):
         # 动态计算总带宽和总时间
         self.total_bandwidth = self.fchans * self.df
         self.total_time = self.tchans * self.dt
+        self.t_center = torch.tensor((self.tchans - 1) / 2 / (self.tchans - 1))
+        self.t_width = torch.tensor((self.tchans - 1) / (self.tchans - 1))
 
     def __len__(self):
         return 10 ** 9  # 虚拟一个很大的长度
@@ -134,7 +136,7 @@ class DynamicSpectrumDataset(Dataset):
                 'spread_type': random.choice(['uniform', 'normal']),
                 'spread': random.choices(
                     [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 7.5, 10.0, 15.0, 20.0, 25.0]),
-                # sine 相关参数
+                # squared 相关参数
                 'squared_drift': drift_rate * 5.e-4
             }
 
@@ -251,9 +253,9 @@ class DynamicSpectrumDataset(Dataset):
 
                 # YOLO format: [class_id, x_center, y_center, width, height]
                 gt_boxes[:N, 0] = torch.clamp(classes, 0.0, 1.0)
-                gt_boxes[:N, 1] = torch.clamp(t_center, 0.0, 1.0)
+                gt_boxes[:N, 1] = self.t_center
                 gt_boxes[:N, 2] = torch.clamp(f_center, 0.0, 1.0)
-                gt_boxes[:N, 3] = torch.clamp(t_width, 0.0, 1.0)
+                gt_boxes[:N, 3] = self.t_width
                 gt_boxes[:N, 4] = torch.clamp(f_width, 0.0, 1.0)
             return noisy_spec, clean_spec, gt_boxes
         elif self.mode == 'detection':

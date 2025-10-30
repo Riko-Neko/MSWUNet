@@ -50,7 +50,7 @@ class TinyYOLO(nn.Module):
     Very small YOLO-style single-scale detector.
     Output: (B, S, S, B*5 + C) as a flattened tensor: (B, output_dim, S, S)
     """
-    def __init__(self, num_classes=20, S=7, B=2, base_channels=32):
+    def __init__(self, num_classes=2, S=7, B=2, base_channels=32):
         super().__init__()
         self.S = S
         self.B = B
@@ -58,7 +58,7 @@ class TinyYOLO(nn.Module):
         # backbone: extremely small
         c = base_channels
         self.backbone = nn.Sequential(
-            ConvBlock(3, c, k=3, s=1, p=1),    # c x H x W
+            ConvBlock(1, c, k=3, s=1, p=1),    # c x H x W
             nn.MaxPool2d(2,2),                 # c x H/2 x W/2
             ConvBlock(c, c*2, k=3, s=1, p=1),  # 2c
             nn.MaxPool2d(2,2),                 # 2c x H/4
@@ -188,7 +188,8 @@ class YOLOv1Loss(nn.Module):
         # create mask for responsible bbox positions
         resp_mask = best_bbox_onehot.bool()  # (B,S,S,B)
         # assign conf_target into resp positions
-        conf_target_exp = conf_target_exp.masked_fill(resp_mask, conf_target.unsqueeze(-1).expand_as(pred_conf)[resp_mask])
+        val = conf_target.unsqueeze(-1).expand_as(pred_conf)
+        conf_target_exp = torch.where(resp_mask, val, torch.zeros_like(val))
 
         # object (positive) loss
         obj_loss = F.mse_loss(pred_conf * obj_mask_f.expand_as(pred_conf), conf_target_exp * obj_mask_f.expand_as(pred_conf), reduction='sum')

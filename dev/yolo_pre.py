@@ -1,12 +1,13 @@
 # train_tinyyolo_yolo_dynamic.py
 from pathlib import Path
+
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from gen.SETIdataset import DynamicSpectrumDataset
 from model.tiny_yolo import TinyYOLO, YOLOv1Loss
-
 
 # ======= User configs =======
 mode = 'yolo'
@@ -33,21 +34,27 @@ use_fil = True
 fil_folder = Path('./data/33exoplanets/bk')
 background_fil = list(fil_folder.rglob("*.fil"))
 
+
 # ======= Collate function =======
 def collate_fn_for_yolo(batch):
     images, targets = [], []
     for item in batch:
-        noisy_spec, _, gt_boxes = item  # use clean if you prefer: _, clean, gt_boxes
-        images.append(noisy_spec)
+        _, clean_spec, gt_boxes = item  # if you want clean, replace with (_, clean, gt_boxes)
+        if isinstance(clean_spec, np.ndarray):
+            clean_spec = torch.from_numpy(clean_spec).float()
+        # add channel dimension if missing
+        if clean_spec.ndim == 2:
+            clean_spec = clean_spec.unsqueeze(0)  # (1, H, W)
+        images.append(clean_spec)
+
+        # handle gt_boxes
         if isinstance(gt_boxes, torch.Tensor):
             valid_mask = ~torch.isnan(gt_boxes).all(dim=-1)
             valid = gt_boxes[valid_mask]
-            if valid.numel() == 0:
-                targets.append(torch.empty((0, 5), dtype=torch.float32))
-            else:
-                targets.append(valid.float())
+            targets.append(valid.float() if valid.numel() > 0 else torch.empty((0, 5), dtype=torch.float32))
         else:
             targets.append(torch.empty((0, 5), dtype=torch.float32))
+
     images = torch.stack(images, dim=0)
     return images, targets
 
@@ -84,10 +91,10 @@ def train_one_epoch(model, loss_fn, dataloader, optimizer, device, steps_per_epo
     iterator = iter(dataloader)
     for step in tqdm(range(steps_per_epoch), desc="Training"):
         try:
-            _, images, targets_list = next(iterator)
+            images, targets_list = next(iterator)
         except StopIteration:
             iterator = iter(dataloader)
-            _, images, targets_list = next(iterator)
+            images, targets_list = next(iterator)
 
         images = images.to(device)
         preds = model(images)
@@ -109,10 +116,10 @@ def validate(model, loss_fn, dataloader, device, val_steps=20):
     with torch.no_grad():
         for step in tqdm(range(val_steps), desc="Validating"):
             try:
-                _, images, targets_list = next(iterator)
+                images, targets_list = next(iterator)
             except StopIteration:
                 iterator = iter(dataloader)
-                _, images, targets_list = next(iterator)
+                images, targets_list = next(iterator)
 
             images = images.to(device)
             preds = model(images)
@@ -162,9 +169,9 @@ def main():
 
     epochs = 5
     for epoch in range(epochs):
-        tr_loss = train_one_epoch(model, loss_fn, train_loader, optimizer, device, steps_per_epoch=100)
-        val_loss = validate(model, loss_fn, val_loader, device, val_steps=20)
-        print(f"Epoch [{epoch+1}/{epochs}] Train Loss: {tr_loss:.4f} | Val Loss: {val_loss:.4f}")
+        tr_loss = train_one_epoch(model, loss_fn, train_loader, optimizer, device, steps_per_epoch=10)
+        val_loss = validate(model, loss_fn, val_loader, device, val_steps=5)
+        print(f"Epoch [{epoch + 1}/{epochs}] Train Loss: {tr_loss:.4f} | Val Loss: {val_loss:.4f}")
 
 
 if __name__ == "__main__":
