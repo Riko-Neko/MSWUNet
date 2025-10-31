@@ -177,10 +177,10 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                     'loss': total_loss.item(),
                     'deno': denoise_loss,
                     'det': detection_loss,
-                    'loc': det_loss_loc,
-                    'class': det_loss_class,
-                    'conf': det_loss_conf,
-                    'n_matched': det_n_matched,
+                    'loc': det_loss_loc.item(),
+                    'class': det_loss_class.item(),
+                    'conf': det_loss_conf.item(),
+                    'n_matched': det_n_matched.item(),
                     'λ': lambda_denoise.item() if hasattr(lambda_denoise, 'item') else lambda_denoise
                 })
             else:
