@@ -165,46 +165,50 @@ def build_target_regression(gt_boxes: torch.Tensor, num_classes: int = 2, N: int
 
 
 class RegressionHeadLoss(nn.Module):
-    def __init__(self, w_loc: float = 1.0, w_class: float = 1.0, w_conf: float = 1.0, eps: float = 1e-8):
+    def __init__(self, num_classes: int = 2, N: int = 10, w_loc: float = 1.0, w_class: float = 1.0, w_conf: float = 1.0,
+                 eps: float = 1e-8):
         super().__init__()
+        self.num_classes = num_classes
+        self.N_bins = N
         self.w_loc = float(w_loc)
         self.w_class = float(w_class)
         self.w_conf = float(w_conf)
         self.eps = float(eps)
         self.bce_logits = nn.BCEWithLogitsLoss(reduction="none")
 
-    def _greedy_one2one_match(self, cost: torch.Tensor, n_gt: int, n_pred: int):
-        assert cost.dim() == 2
-        K, N = cost.shape
-        if K == 0:
-            return []
-
-        c = cost.clone()
-        very_large = float(1e6)
-        pairs = []
-        for _ in range(min(n_gt, n_pred)):
-            val, idx = torch.min(c.view(-1), dim=0)
-            if val.item() >= very_large / 2:
-                break
-            row = (idx // N).item()
-            col = (idx % N).item()
-            pairs.append((row, col))
-            c[row, :] = very_large
-            c[:, col] = very_large
-        return pairs
+    @staticmethod
+    def _iou_1d_interval(s1: torch.Tensor, e1: torch.Tensor, s2: torch.Tensor, e2: torch.Tensor,
+                         eps: float = 1e-8) -> torch.Tensor:
+        """Compute 1D IoU for intervals (tensors). Handles unordered start/end."""
+        a1 = torch.min(s1, e1)
+        b1 = torch.max(s1, e1)
+        a2 = torch.min(s2, e2)
+        b2 = torch.max(s2, e2)
+        inter_left = torch.max(a1, a2)
+        inter_right = torch.min(b1, b2)
+        inter = torch.clamp(inter_right - inter_left, min=0.0)
+        union_left = torch.min(a1, a2)
+        union_right = torch.max(b1, b2)
+        union = torch.clamp(union_right - union_left, min=eps)
+        return inter / union
 
     @staticmethod
-    def _iou_1d_interval(s1: float, e1: float, s2: float, e2: float, eps: float = 1e-8) -> float:
-        """Compute 1D IoU for intervals (scalars). Handles unordered start/end."""
-        a1, b1 = (s1, e1) if s1 <= e1 else (e1, s1)
-        a2, b2 = (s2, e2) if s2 <= e2 else (e2, s2)
-        inter_left = max(a1, a2)
-        inter_right = min(b1, b2)
-        inter = max(0.0, inter_right - inter_left)
-        union_left = min(a1, a2)
-        union_right = max(b1, b2)
-        union = max(eps, union_right - union_left)
-        return inter / union
+    def _giou_1d_interval(s1: torch.Tensor, e1: torch.Tensor, s2: torch.Tensor, e2: torch.Tensor,
+                          eps: float = 1e-8) -> torch.Tensor:
+        """Compute 1D GIoU for intervals."""
+        iou = RegressionHeadLoss._iou_1d_interval(s1, e1, s2, e2, eps)
+        a1 = torch.min(s1, e1)
+        b1 = torch.max(s1, e1)
+        a2 = torch.min(s2, e2)
+        b2 = torch.max(s2, e2)
+        c_left = torch.min(a1, a2)
+        c_right = torch.max(b1, b2)
+        convex = torch.clamp(c_right - c_left, min=eps)
+        len1 = b1 - a1
+        len2 = b2 - a2
+        union = len1 + len2 - (iou * union)  # union = len1 + len2 - inter
+        giou = iou - (convex - union) / convex
+        return giou
 
     def forward(self, pred: Dict[str, torch.Tensor], gt_boxes: torch.Tensor) -> Tuple[
         torch.Tensor, Dict[str, torch.Tensor]]:
@@ -219,7 +223,7 @@ class RegressionHeadLoss(nn.Module):
         C = p_class_logits.shape[-1]
 
         # Unpack targets
-        target = build_target_regression(gt_boxes)
+        target = build_target_regression(gt_boxes, num_classes=self.num_classes, N=self.N_bins)
         f_start_all = target["f_start"].to(device)  # (B, K)
         f_end_all = target["f_end"].to(device)  # (B, K)
         classes_all = target["class"].to(device)  # (B, K, C)
@@ -261,25 +265,26 @@ class RegressionHeadLoss(nn.Module):
 
             cost = loc_mse + class_l2  # (K,N)
 
-            pairs = self._greedy_one2one_match(cost, n_gt=K, n_pred=N)
-            if len(pairs) == 0:
-                continue
+            # Hungarian matching
+            row_ind, col_ind = linear_sum_assignment(cost.cpu().numpy())
+            pairs = [(r, c) for r, c in zip(row_ind, col_ind)]
+
+            matched_preds = set(col_ind)
+            unmatched_preds = [pj for pj in range(N) if pj not in matched_preds]
 
             loc_losses = []
             class_losses = []
             conf_losses = []
 
             for (gi, pj) in pairs:
-                gt_s = f_start[gi].item()
-                gt_e = f_end[gi].item()
+                pred_s = torch.sigmoid(ps[pj])
+                pred_e = torch.sigmoid(pe[pj])
+                gt_s = f_start[gi]
+                gt_e = f_end[gi]
 
-                pred_s_logit = ps[pj]
-                pred_e_logit = pe[pj]
-
-                # localization loss: MSE in sigmoid-space
-                pred_s = torch.sigmoid(pred_s_logit)
-                pred_e = torch.sigmoid(pred_e_logit)
-                loc_loss = (pred_s - f_start[gi]).pow(2) + (pred_e - f_end[gi]).pow(2)
+                # localization loss: 1 - GIoU
+                giou = self._giou_1d_interval(pred_s, pred_e, gt_s, gt_e, self.eps)
+                loc_loss = 1 - giou
                 loc_losses.append(loc_loss)
 
                 # classification loss: BCEWithLogits between logits and target vector (sum over classes)
@@ -290,25 +295,24 @@ class RegressionHeadLoss(nn.Module):
                 class_loss = class_elem.sum()
                 class_losses.append(class_loss)
 
-                # confidence loss: supervise by IoU (1D) between predicted interval and GT
+                # confidence obj loss for positive
                 if pconf is not None:
-                    pred_s_val = pred_s.item()
-                    pred_e_val = pred_e.item()
-                    iou = self._iou_1d_interval(pred_s_val, pred_e_val, gt_s, gt_e, eps=self.eps)
-                    pred_conf_sig = torch.sigmoid(pconf[pj])
-                    # MSE between predicted confidence (sigmoid) and IoU target
-                    conf_loss = (pred_conf_sig - iou) ** 2
-                    conf_losses.append(conf_loss)
+                    conf_loss_pos = self.bce_logits(pconf[pj].unsqueeze(0), torch.tensor([1.0], device=device))
+                    conf_losses.append(conf_loss_pos)
+
+            # confidence obj loss for negative (unmatched preds)
+            if pconf is not None:
+                for pj in unmatched_preds:
+                    conf_loss_neg = self.bce_logits(pconf[pj].unsqueeze(0), torch.tensor([0.0], device=device))
+                    conf_losses.append(conf_loss_neg)
 
             loc_sum = torch.stack(loc_losses).sum() if len(loc_losses) > 0 else torch.tensor(0.0, device=device)
             class_sum = torch.stack(class_losses).sum() if len(class_losses) > 0 else torch.tensor(0.0, device=device)
+            conf_sum = torch.stack(conf_losses).sum() if len(conf_losses) > 0 else torch.tensor(0.0, device=device)
             total_loc += loc_sum
             total_class += class_sum
+            total_conf += conf_sum
             total_matched += len(pairs)
-
-            if pconf is not None:
-                conf_sum = torch.stack(conf_losses).sum() if len(conf_losses) > 0 else torch.tensor(0.0, device=device)
-                total_conf += conf_sum
 
         if total_matched == 0:
             zero = torch.tensor(0.0, device=device)
@@ -316,8 +320,7 @@ class RegressionHeadLoss(nn.Module):
 
         loc_loss_avg = total_loc / (total_matched + self.eps)
         class_loss_avg = total_class / (total_matched + self.eps)
-        conf_loss_avg = total_conf / (total_matched + self.eps) if p_conf_logits is not None else torch.tensor(0.0,
-                                                                                                               device=device)
+        conf_loss_avg = total_conf / (B * N + self.eps)  # average over all predictions
 
         total_loss = self.w_loc * loc_loss_avg + self.w_class * class_loss_avg + self.w_conf * conf_loss_avg
 

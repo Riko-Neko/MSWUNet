@@ -1,10 +1,7 @@
-from typing import Dict
-
 import pytorch_wavelets.dwt.lowlevel as lowlevel
 import pywt
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torchinfo import summary
 
 """
@@ -429,117 +426,29 @@ class ConvBlock1D(nn.Module):
 
 
 """
-FreqDetector with frequency-only FPN / PAN fusion for 1D-frequency object detection.
+Regressive heads for 1D-frequency object detection.
 
 Design goals (implemented):
-- Only upsample/downsample the FREQUENCY axis (last spatial dim), preserve TIME axis.
-- Top-down lateral fusion (like YOLO): deep -> upsample 2x -> concat with next shallow
-- Optional PAN bottom-up path-aggregation to strengthen low-level features
-- SPP on deepest layer to enlarge receptive field in frequency axis (optional)
-- Heads attached to multiple pyramid levels; each head expects (B,C,T,F)
-- Example usage and shape checks at bottom
-
-Assumptions:
-- feat_list is ordered from shallow->deep: [C3, C4, C5], but you can pass more/less levels.
-- Each tensor has shape (B, C, T, F_i). We assume TIME dimension T may differ across levels; the
-  forward now performs pairwise time alignment at fusion points.
-- in_channels_list must match feat_list channels.
-
-Notes:
-- This is a self-contained module you can drop into your codebase. It does not depend on other project files.
-- The detection head is imported from your earlier implementation or you can use the included simple head.
+- 1D-frequency object detection: predict start and end frequency of each object, and classify each object.
 """
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Dict
 
 
-def align_time(x: torch.Tensor, T_tgt: int, mode: str = 'auto') -> torch.Tensor:
-    """
-    Align time dimension of x to T_tgt.
-
-    x: (B, C, T_src, F)
-    mode: 'auto'|'avg'|'linear'
-      - 'auto': if T_src > T_tgt -> avg pool (downsample), else -> linear interpolate (upsample)
-    Returns x_aligned: (B, C, T_tgt, F)
-    """
-    B, C, T_src, F_len = x.shape
-    if T_src == T_tgt:
-        return x
-    if mode == 'auto':
-        mode = 'avg' if T_src > T_tgt else 'linear'
-
-    # reshape to (B*F, C, T_src) to use 1D ops
-    x_perm = x.permute(0, 3, 1, 2).reshape(B * F_len, C, T_src)  # (B*F, C, T_src)
-
-    if mode == 'avg':
-        # adaptive avg pool gives robust downsampling
-        x_al = F.adaptive_avg_pool1d(x_perm, output_size=T_tgt)  # This operation is not supported by mps backend yet!!!
-    else:
-        # linear interpolation for upsampling or explicit linear downsample
-        x_al = F.interpolate(x_perm, size=T_tgt, mode='linear', align_corners=False)
-
-    # reshape back to (B, C, T_tgt, F)
-    x_al = x_al.view(B, F_len, C, T_tgt).permute(0, 2, 3, 1).contiguous()
-    return x_al
-
-
-def upsample_F(x: torch.Tensor, F_tgt: int) -> torch.Tensor:
-    """
-    Upsample only frequency axis from F_src to F_tgt.
-
-    x: (B, C, T, F_src)
-    returns: (B, C, T, F_tgt)
-    Implementation: reshape to (B*T, C, F_src) and use interpolate(mode='linear').
-    """
-    B, C, T, F_src = x.shape
-    if F_src == F_tgt:
-        return x
-    x_perm = x.permute(0, 2, 1, 3).reshape(B * T, C, F_src)  # (B*T, C, F_src)
-    x_up = F.interpolate(x_perm, size=F_tgt, mode='linear', align_corners=False)
-    x_up = x_up.view(B, T, C, F_tgt).permute(0, 2, 1, 3).contiguous()
-    return x_up
-
-
-def downsample_F(x: torch.Tensor, F_tgt: int) -> torch.Tensor:
-    """Downsample only frequency axis to F_tgt using linear interpolation (or avg pool).
-    Keep shape (B, C, T, F_tgt).
-    """
-    B, C, T, F_src = x.shape
-    if F_src == F_tgt:
-        return x
-    x_perm = x.permute(0, 2, 1, 3).reshape(B * T, C, F_src)
-    x_down = F.interpolate(x_perm, size=F_tgt, mode='linear', align_corners=False)
-    x_down = x_down.view(B, T, C, F_tgt).permute(0, 2, 1, 3).contiguous()
-    return x_down
-
-
-class SPP1D(nn.Module):
-    """
-    SPP-like block on frequency axis using 1D pooling.
-
-    Input: (B, C, T, F)
-    Output: (B, C_out, T, F) where C_out == C (we concat pooled features then conv)
-    """
-
-    def __init__(self, in_ch: int, pool_sizes=(5, 9, 13)):
+class PositionalEncoding1D(nn.Module):
+    def __init__(self, d_model: int, max_len: int = 8192):
         super().__init__()
-        self.pool_sizes = pool_sizes
-        self.conv = nn.Conv2d(in_ch * (1 + len(pool_sizes)), in_ch, kernel_size=1)
+        position = torch.arange(max_len).unsqueeze(1).float()
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, C, T, F) => transform to (B*T, C, F) to do 1D pooling
-        B, C, T, F_len = x.shape
-        x_rt = x.permute(0, 2, 1, 3).reshape(B * T, C, F_len)  # (B*T, C, F)
-
-        pooled = [x_rt]
-        for k in self.pool_sizes:
-            # pad so pooling keeps same length (use replicate pad)
-            pad = (k - 1) // 2
-            x_p = F.max_pool1d(F.pad(x_rt, (pad, k - 1 - pad), mode='replicate'), kernel_size=k, stride=1)
-            pooled.append(x_p)
-
-        cat = torch.cat(pooled, dim=1)  # (B*T, C*(1+len), F)
-        out = self.conv(cat.unsqueeze(2)).squeeze(2)  # conv expects 4D, we use (N, C, 1, F)
-        out = out.view(B, T, C, F_len).permute(0, 2, 1, 3).contiguous()  # (B, C, T, F)
-        return out
+    def forward(self, length: int, device):
+        return self.pe[:length].to(device)
 
 
 class FreqRegressionDetector(nn.Module):
@@ -559,7 +468,7 @@ class FreqRegressionDetector(nn.Module):
         - backbone_downsample: number of downsampling layers in backbone
         - dropout: dropout rate in FC layers
     Usage:
-        model = RegressionDetector(in_channels=1, N=8, num_classes=2)
+        model = FreqRegressionDetector(in_channels=1, N=8, num_classes=2)
         out = model(x)  # out is a dict
     """
 
@@ -568,33 +477,43 @@ class FreqRegressionDetector(nn.Module):
         super().__init__()
         self.N = N
         self.num_classes = num_classes
+        self.hidden_dim = hidden_dim
 
         convs = []
         ch = in_channels
         for i in range(backbone_downsample):
             out_ch = feat_channels if i == 0 else feat_channels * (1 + i // 2)
-            convs.append(nn.Conv2d(ch, out_ch, kernel_size=3, stride=2, padding=1, bias=False))
+            # Downsample more on T (dim=2), less on F (dim=3) to preserve frequency resolution
+            stride = (2, 1 if i >= backbone_downsample // 2 else 2)  # Reduce F downsampling in later layers
+            convs.append(nn.Conv2d(ch, out_ch, kernel_size=3, stride=stride, padding=1, bias=False))
             convs.append(nn.BatchNorm2d(out_ch))
             convs.append(nn.ReLU(inplace=True))
             ch = out_ch
 
-        # 追加一层 3x3 conv 增加感受野（不改变尺寸）
+        # Additional conv to increase receptive field
         convs.append(nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1, bias=False))
         convs.append(nn.BatchNorm2d(ch))
         convs.append(nn.ReLU(inplace=True))
         self.conv_backbone = nn.Sequential(*convs)
 
-        # Global pooling
-        self.global_pool = nn.AdaptiveAvgPool2d(1)  # 输出 (B, ch, 1, 1)
-        feat_dim = ch  # channels after backbone
+        self.feat_dim = ch  # channels after backbone
 
-        # Shared FC layers
-        self.fc_shared = nn.Sequential(nn.Linear(feat_dim, hidden_dim), nn.ReLU(inplace=True),
-                                       nn.Dropout(p=dropout) if dropout > 0 else nn.Identity(), )
+        # Positional encoding for frequency axis
+        self.pos_embed = PositionalEncoding1D(ch, )
 
-        # Output: N * (2 (start,end) + num_classes + 1 (confidence))
-        out_dim_per_item = 2 + num_classes + 1
-        self.fc_out = nn.Linear(hidden_dim, N * out_dim_per_item)
+        # Transformer encoder to process frequency features
+        encoder_layer = nn.TransformerEncoderLayer(d_model=ch, nhead=8, dim_feedforward=hidden_dim, dropout=dropout,
+                                                   activation='relu')
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
+
+        # Learnable query embeddings for N boxes
+        self.query_embed = nn.Parameter(torch.randn(N, ch))
+
+        # MLPs for each output head
+        self.fc_start = nn.Linear(ch, 1)
+        self.fc_end = nn.Linear(ch, 1)
+        self.fc_class = nn.Linear(ch, num_classes)
+        self.fc_conf = nn.Linear(ch, 1)
 
         self._init_weights()
 
@@ -609,6 +528,12 @@ class FreqRegressionDetector(nn.Module):
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1.0)
                 nn.init.constant_(m.bias, 0.0)
+            elif isinstance(m, nn.TransformerEncoderLayer):
+                for p in m.parameters():
+                    if p.dim() > 1:
+                        nn.init.xavier_uniform_(p)
+
+        nn.init.normal_(self.query_embed, mean=0.0, std=0.02)
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
@@ -617,16 +542,37 @@ class FreqRegressionDetector(nn.Module):
         # x: (B, C, T, F)
         B = x.size(0)
         feat = self.conv_backbone(x)  # (B, ch, T', F')
-        pooled = self.global_pool(feat).view(B, -1)  # (B, feat_dim)
-        hid = self.fc_shared(pooled)  # (B, hidden_dim)
-        out = self.fc_out(hid)  # (B, N * out_dim_per_item)
-        out = out.view(B, self.N, -1)  # (B, N, out_dim_per_item)
 
-        # 切分
-        f_start = out[..., 0]  # (B, N)  raw (logit) -> 推荐 sigmoid to [0,1]
-        f_end = out[..., 1]  # (B, N)
-        class_logits = out[..., 2:2 + self.num_classes]  # (B, N, C) logits
-        confidence = out[..., -1]  # (B, N)  raw logits -> sigmoid for prob
+        # Average pool over time dimension to focus on frequency
+        feat = feat.mean(dim=2)  # (B, ch, F')
+
+        # Permute to sequence format: (F', B, ch)
+        feat = feat.permute(2, 0, 1)
+
+        # Add positional encoding
+        pos = self.pos_embed(feat.shape[0], feat.device)  # (F', 1, ch)
+        pos = pos.expand(-1, B, -1)  # (F', B, ch)
+        feat = feat + pos
+
+        # Encode frequency features
+        feat = self.transformer_encoder(feat)  # (F', B, ch)
+
+        # Query embeddings
+        queries = self.query_embed.unsqueeze(1).expand(-1, B, -1)  # (N, B, ch)
+
+        # Compute attention: dot-product attention
+        attn = torch.einsum("nbc, sbc -> nbs", queries, feat) / (self.feat_dim ** 0.5)
+        attn = F.softmax(attn, dim=-1)
+
+        # Weighted sum to get per-box features
+        box_feats = torch.einsum("nbs, sbc -> nbc", attn, feat)  # (N, B, ch)
+        box_feats = box_feats.permute(1, 0, 2)  # (B, N, ch)
+
+        # Predict outputs
+        f_start = self.fc_start(box_feats).squeeze(-1)  # (B, N)
+        f_end = self.fc_end(box_feats).squeeze(-1)  # (B, N)
+        class_logits = self.fc_class(box_feats)  # (B, N, num_classes)
+        confidence = self.fc_conf(box_feats).squeeze(-1)  # (B, N)
 
         return {"f_start": f_start, "f_end": f_end, "class_logits": class_logits, "confidence": confidence}
 

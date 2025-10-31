@@ -6,13 +6,12 @@ import pandas as pd
 import torch
 
 from pipeline.metrics import execute_hits_hough
-from utils.det_utils import decode_F, nms_1d
+from utils.det_utils import decode_F
 
 
 class SETIPipelineProcessor:
-    def __init__(self, dataset, model, device, mode='mask', log_dir=Path("./pipeline/log"),
-                 verbose=False, drift=[-4.0, 4.0], snr_threshold=5.0, min_abs_drift=0.05, nms_iou_thresh=0.5,
-                 nms_score_thresh=0.5, nms_top_k=10):
+    def __init__(self, dataset, model, device, mode='mask', log_dir=Path("./pipeline/log"), verbose=False,
+                 drift=[-4.0, 4.0], snr_threshold=5.0, min_abs_drift=0.05, iou_thresh=0.5, score_thresh=0.5, top_k=10):
         """
         Initialize the SETI pipeline processor with dataset and model
 
@@ -26,9 +25,9 @@ class SETIPipelineProcessor:
             drift: Drift rate range for mask mode [min_drift, max_drift] in Hz/s
             snr_threshold: SNR threshold for mask mode hits detection
             min_abs_drift: Minimum absolute drift rate for mask mode
-            nms_iou_thresh: IoU threshold for detection mode NMS
-            nms_score_thresh: Confidence threshold for detection mode NMS
-            nms_top_k: Maximum number of detections to keep per patch
+            iou_thresh: IoU threshold for detection mode NMS
+            score_thresh: Confidence threshold for detection mode NMS
+            top_k: Maximum number of detections to keep per patch
         """
         assert mode in ['mask', 'detection'], f"Unsupported mode: {mode}"
 
@@ -62,9 +61,9 @@ class SETIPipelineProcessor:
             self.snr_threshold = snr_threshold
             self.min_abs_drift = min_abs_drift
         else:  # detection mode
-            self.nms_iou_thresh = nms_iou_thresh
-            self.nms_score_thresh = nms_score_thresh
-            self.nms_top_k = nms_top_k
+            self.nms_iou_thresh = iou_thresh
+            self.nms_score_thresh = score_thresh
+            self.nms_top_k = top_k
 
         # Logging setup
         if log_dir != Path("./pipeline/log"):
@@ -107,17 +106,11 @@ class SETIPipelineProcessor:
             df_hits: DataFrame containing detection hits information
         """
         # Decode predictions
-        det_outs = [decode_F(raw) for raw in raw_preds]  # List of (B, N_i, 3)
-        det_out = torch.cat(det_outs, dim=1)  # (B, total_N, 3)
-
-        # Apply NMS
-        pred_boxes_list = nms_1d(det_out,
-                                 iou_thresh=self.nms_iou_thresh,
-                                 score_thresh=self.nms_score_thresh,
-                                 top_k=self.nms_top_k)
-
-        # Process detections for the first batch item (assuming B=1)
-        pred_boxes = pred_boxes_list[0]  # (M, 3) - [f_start, f_stop, confidence]
+        det_outs = decode_F(raw_preds, iou_thresh=self.nms_iou_thresh, score_thresh=self.nms_score_thresh)  # dict
+        f_starts = det_outs["f_start"][0].cpu().numpy()
+        f_stops = det_outs["f_end"][0].cpu().numpy()
+        confidence = det_outs["confidence"][0].cpu().numpy()
+        classes = det_outs["class"][0].cpu().numpy()
 
         hits = []
         freq_min, freq_max = freq_range
@@ -125,31 +118,26 @@ class SETIPipelineProcessor:
         time_duration = time_end - time_start
 
         # Convert normalized frequency coordinates to absolute MHz
-        for box in pred_boxes:
-            f_start_norm, f_stop_norm, confidence = box.tolist()
-
+        for class_id, f_start_norm, f_stop_norm, confidence in zip(classes, f_starts, f_stops, confidence):
             # Convert normalized frequencies to absolute frequencies (MHz)
-            f_start_abs = freq_min + (freq_max - freq_min) * f_start_norm
-            f_stop_abs = freq_min + (freq_max - freq_min) * f_stop_norm
-
-            # Ensure frequency ordering for spatial representation
-            if f_start_abs > f_stop_abs:
-                f_start_abs, f_stop_abs = f_stop_abs, f_start_abs
+            f_start = freq_min + (freq_max - freq_min) * f_start_norm
+            f_stop = freq_min + (freq_max - freq_min) * f_stop_norm
 
             # Calculate drift rate (Hz/s)
             # Drift rate = (frequency change) / time duration
-            freq_change_hz = (f_stop_abs - f_start_abs) * 1e6  # Convert MHz to Hz
+            freq_change_hz = (f_stop - f_start) * 1e6  # Convert MHz to Hz
             drift_rate = freq_change_hz / time_duration if time_duration > 0 else 0.0
 
             # Determine uncorrected frequency (starting frequency)
-            uncorr_freq = f_start_abs if f_start_norm <= f_stop_norm else f_stop_abs
+            uncorr_freq = f_start if f_start_norm <= f_stop_norm else f_stop
 
             hits.append({
                 'DriftRate': drift_rate,
                 'SNR': 0.0,  # SNR not available in detection mode
                 'Uncorrected_Frequency': uncorr_freq,
-                'freq_start': min(f_start_abs, f_stop_abs),
-                'freq_end': max(f_start_abs, f_stop_abs),
+                'freq_start': min(f_start, f_stop),
+                'freq_end': max(f_start, f_stop),
+                'class_id': class_id,
                 'confidence': confidence
             })
 
@@ -177,7 +165,40 @@ class SETIPipelineProcessor:
         with torch.no_grad():
             outputs = self.model(patch_data)
 
-            if self.mode == 'mask':
+            if self.mode == 'detection':
+                # Detection mode: denoised, regs_dict
+                if len(outputs) == 2:
+                    denoised, regs_dict = outputs
+                else:
+                    # Handle case where model returns different number of outputs
+                    denoised = outputs[0]
+                    regs_dict = outputs[1] if len(outputs) > 1 else None
+
+                # Use maximum detection confidence as patch confidence
+                confidence = 0.0
+                if regs_dict is not None:
+                    # Extract confidence scores from raw predictions
+                    # Decode predictions
+                    det_outs = decode_F(regs_dict, iou_thresh=self.nms_iou_thresh,
+                                        score_thresh=self.nms_score_thresh)  # dict
+                    confidences = det_outs["confidence"][0].cpu()
+                    if det_outs:
+                        confidence = confidences.max().item() if confidences.numel() > 0 else 0.0
+
+                # Determine status based on confidence
+                if confidence > self.nms_score_thresh:
+                    status = True
+                else:
+                    status = False
+
+                # Process detections to generate hits
+                hits_info = None
+                df_hits = pd.DataFrame()
+                if status is True and regs_dict is not None:
+                    df_hits = self._process_detection_hits(regs_dict, freq_range, time_range)
+
+
+            else:  # 'mask' mode as default
                 # Mask mode: denoised, mask, logits
                 if len(outputs) == 3:
                     denoised, mask, logits = outputs
@@ -219,36 +240,6 @@ class SETIPipelineProcessor:
                             df_hits['freq_start'] = freq_min - (df_hits['freq_start'] / 1e6)
                         if 'freq_end' in df_hits.columns:
                             df_hits['freq_end'] = freq_min - (df_hits['freq_end'] / 1e6)
-
-            else:  # detection mode
-                # Detection mode: denoised, raw_preds
-                if len(outputs) == 2:
-                    denoised, raw_preds = outputs
-                else:
-                    # Handle case where model returns different number of outputs
-                    denoised = outputs[0]
-                    raw_preds = outputs[1] if len(outputs) > 1 else None
-
-                # Use maximum detection confidence as patch confidence
-                confidence = 0.0
-                if raw_preds is not None:
-                    # Extract confidence scores from raw predictions
-                    det_outs = [decode_F(raw) for raw in raw_preds]
-                    if det_outs:
-                        all_confidences = torch.cat([out[:, :, 2] for out in det_outs], dim=1)
-                        confidence = all_confidences.max().item() if all_confidences.numel() > 0 else 0.0
-
-                # Determine status based on confidence
-                if confidence > self.nms_score_thresh:
-                    status = True
-                else:
-                    status = False
-
-                # Process detections to generate hits
-                hits_info = None
-                df_hits = pd.DataFrame()
-                if status is True and raw_preds is not None:
-                    df_hits = self._process_detection_hits(raw_preds, freq_range, time_range)
 
             # Prepare hits info for logging
             hits_info = df_hits.to_string(index=False) if not df_hits.empty else "No hits detected."
@@ -294,7 +285,16 @@ class SETIPipelineProcessor:
             print(
                 f"[\033[35mML\033[0m] Found candidate in cell ({row}, {col}), frequency: {freq_range[0]:.4f} - {freq_range[1]:.4f} MHz")
             for idx, hit_row in df_hits.iterrows():
-                if self.mode == 'mask':
+                if self.mode == 'detection':
+                    print(
+                        f"[\033[36mHit\033[0m] Found signal {idx + 1}: "
+                        f"Class=\033[32m{hit_row['class_id']}\033[0m"
+                        f"Confidence=\033[32m{hit_row['confidence']:.2f}\033[0m, "
+                        f"DriftRate=\033[32m{hit_row['DriftRate']:.4f} Hz/s\033[0m, "
+                        f"Freq=\033[32m{hit_row['Uncorrected_Frequency']:.6f}\033[0m Mhz, "
+                        f"Range=[{hit_row['freq_start']:.6f}, {hit_row['freq_end']:.6f}] MHz"
+                    )
+                else:  # 'mask' mode as default
                     print(
                         f"[\033[36mHit\033[0m] Found signal {idx + 1}: "
                         f"SNR=\033[32m{hit_row['SNR']:.2f}\033[0m, "
@@ -302,23 +302,8 @@ class SETIPipelineProcessor:
                         f"Freq=\033[32m{hit_row['Uncorrected_Frequency']:.6f}\033[0m Mhz, "
                         f"Range=[{hit_row['freq_start']:.6f}, {hit_row['freq_end']:.6f}] MHz"
                     )
-                else:  # detection mode
-                    print(
-                        f"[\033[36mHit\033[0m] Found signal {idx + 1}: "
-                        f"Confidence=\033[32m{hit_row['confidence']:.2f}\033[0m, "
-                        f"DriftRate=\033[32m{hit_row['DriftRate']:.4f} Hz/s\033[0m, "
-                        f"Freq=\033[32m{hit_row['Uncorrected_Frequency']:.6f}\033[0m Mhz, "
-                        f"Range=[{hit_row['freq_start']:.6f}, {hit_row['freq_end']:.6f}] MHz"
-                    )
 
-        return {
-            'status': status,
-            'confidence': confidence,
-            'freq_range': freq_range,
-            'time_range': time_range,
-            'hits_info': hits_info,
-            'mode': self.mode
-        }
+        return status
 
     def process_all_patches(self):
         """Process all patches in the grid"""

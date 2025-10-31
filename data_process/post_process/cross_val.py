@@ -10,7 +10,7 @@ from external.Waterfall import Waterfall
 
 import matplotlib.pyplot as plt
 import torch
-from utils.det_utils import decode_F, nms_1d, plot_F_lines
+from utils.det_utils import decode_F, plot_F_lines
 
 
 def model_crossover_val(wf, dat_df, hit_rows, model, device='cpu', fchans=1024, foff=None, save_dir="visual",
@@ -79,11 +79,11 @@ def model_crossover_val(wf, dat_df, hit_rows, model, device='cpu', fchans=1024, 
 
         # 推理
         with torch.no_grad():
-            if mode == 'mask':
+            if mode == 'detection':
+                denoised, raw_preds = model(patch_tensor)
+            else:  # mask mode
                 denoised, mask, logits = model(patch_tensor)
                 raw_preds = None
-            else:  # detection mode
-                denoised, raw_preds = model(patch_tensor)
 
             denoised_np = denoised.squeeze().cpu().numpy()
             patch_np = patch_tensor.squeeze().cpu().numpy()
@@ -122,35 +122,21 @@ def model_crossover_val(wf, dat_df, hit_rows, model, device='cpu', fchans=1024, 
 
         # 在detection模式下绘制检测框
         if mode == 'detection' and raw_preds is not None:
-            # 处理检测预测
-            det_outs = [decode_F(raw) for raw in raw_preds]  # List of (B, N_i, 3)
-            print(f"[\033[32mInfo\033[0m] Detected {len(det_outs[0][0])} candidates for row {row.name}")
-            det_out = torch.cat(det_outs, dim=1)  # (B, total_N, 3)
+            det_outs = decode_F(raw_preds, iou_thresh=nms_iou_thresh, score_thresh=nms_score_thresh)  # dict
+            f_starts = det_outs["f_start"][0].cpu().numpy()
+            f_stops = det_outs["f_end"][0].cpu().numpy()
+            classes = det_outs["class"][0].cpu().numpy()
+            N_pred = det_outs["confidence"].shape[1]
+            pred_boxes_tuple = (N_pred, classes, f_starts, f_stops)
+            print(f"[\033[32mInfo\033[0m] Detected {N_pred} candidates for row {row.name}")
 
-            # 应用NMS
-            pred_boxes_list = nms_1d(det_out,
-                                     iou_thresh=nms_iou_thresh,
-                                     score_thresh=nms_score_thresh,
-                                     top_k=nms_top_k)
-
-            # 处理第一个batch的检测结果
-            pred_boxes = pred_boxes_list[0]  # (M, 3) - [f_start, f_stop, confidence]
-
-            if len(pred_boxes) > 0:
-                # 提取起始和结束频率（归一化）
-                f_starts = pred_boxes[:, 0].cpu().numpy()
-                f_stops = pred_boxes[:, 1].cpu().numpy()
-                confidences = pred_boxes[:, 2].cpu().numpy()
-
-                # 创建检测框元组用于绘图
-                pred_boxes_tuple = (len(f_starts), f_starts, f_stops)
-
+            if N_pred > 0:
                 # 使用plot_F_lines绘制检测框
-                plot_F_lines(axs[1], freqs, pred_boxes_tuple, normalized=True,
-                             color='red', linestyle='-', linewidth=1.5)
+                plot_F_lines(axs[1], freqs, pred_boxes_tuple, normalized=True, color=['red', 'green'], linestyle='-',
+                             linewidth=1.5)
 
                 # 在标题中添加检测数量信息
-                axs[1].set_title(f"Denoised Spectrum (Detection Mode)\nRow {row.name} - {len(pred_boxes)} detections",
+                axs[1].set_title(f"Denoised Spectrum (Detection Mode)\nRow {row.name} - {N_pred} detections",
                                  fontsize=title_font)
 
         # 保存

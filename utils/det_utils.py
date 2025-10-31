@@ -5,71 +5,122 @@ import torch
 import torch.nn.functional as F
 
 
-def decode_F(out: Dict[str, torch.Tensor], iou_thresh: float = 0.5, score_thresh: float = 0.2) -> Dict[
-    str, torch.Tensor]:
+def decode_F(out: Dict[str, torch.Tensor], iou_thresh: float = 0.5, score_thresh: float = 0.2,
+             apply_filtering: bool = True) -> Dict[str, torch.Tensor]:
     """
     Decode raw logits to normalized probabilities (0-1).
     Args:
         out: dict with keys "f_start", "f_end", "class_logits", "confidence"
         iou_thresh: IoU threshold for filtering overlapping signals in f dimension.
         score_thresh: Confidence threshold for filtering low-score signals.
-    Returns: dict with same keys but values possibly transformed to probabilities,
-             and confidence adjusted to 0 for filtered signals.
+        apply_filtering: If True, apply filtering overlapping signals.
+    Returns:
+        dict with keys:
+            - "f_start": (B, M)
+            - "f_end": (B, M)
+            - "class_id": (B, M) integer class indices
+            - "confidence": (B, M)
+        Where M is the number of valid signals after filtering for the first batch.
+        Other batches are cropped or padded to match M.
+        Padded entries have confidence=0, class_id=-1, f_start=0, f_end=0.
     """
-    f_start = out["f_start"]
-    f_end = out["f_end"]
-    class_logits = out["class_logits"]
-    confidence = out["confidence"]
-    f_start = torch.sigmoid(f_start)
-    f_end = torch.sigmoid(f_end)
-    confidence = torch.sigmoid(confidence)
-    class_prob = F.softmax(class_logits, dim=-1)
+    DEBUG = True
+    f_start = torch.sigmoid(out["f_start"])
+    f_end = torch.sigmoid(out["f_end"])
+    confidence = torch.sigmoid(out["confidence"])
+    class_prob = F.softmax(out["class_logits"], dim=-1)
+    class_id = torch.argmax(class_prob, dim=-1)  # shape: (B, N)
+    B, N = confidence.shape
+    device = confidence.device
+    results = {"f_start": [], "f_end": [], "class": [], "confidence": []}
 
-    # Apply filtering: set confidence to 0 for low scores or overlapping signals
-    B, N = confidence.shape[:2]  # Assume shape [batch, N, ...] but for confidence [B, N]
     for i in range(B):
-        conf = confidence[i]
+        if not apply_filtering:
+            kept_indices = torch.arange(N, device=device)
+        else:
+            conf = confidence[i]
+            low_mask = conf < score_thresh
+            active_mask = ~low_mask
+            if not active_mask.any():
+                kept_indices = torch.tensor([], dtype=torch.long, device=device)
+            else:
+                active_indices = torch.where(active_mask)[0]
+                scores = conf[active_indices]
+                starts = f_start[i][active_indices]
+                ends = f_end[i][active_indices]
 
-        # Apply score threshold
-        low_mask = conf < score_thresh
-        confidence[i][low_mask] = 0
+                # Sort descending by score
+                sort_idx = torch.argsort(scores, descending=True)
+                active_indices = active_indices[sort_idx]
+                starts = starts[sort_idx]
+                ends = ends[sort_idx]
+                scores = scores[sort_idx]
 
-        # Apply IoU filtering (NMS-like, set conf to 0 for suppressed)
-        active_mask = confidence[i] > 0
-        if not active_mask.any():
-            continue
+                suppress = torch.zeros(len(scores), dtype=torch.bool, device=scores.device)
 
-        active_indices = torch.nonzero(active_mask).squeeze(-1)
-        scores = confidence[i][active_indices]
-        starts = f_start[i][active_indices]
-        ends = f_end[i][active_indices]
+                # Precompute nondirectional intervals (retain direction info in starts/ends)
+                low = torch.minimum(starts, ends)
+                high = torch.maximum(starts, ends)
+                lengths = (high - low).clamp(min=0.0)
 
-        # Sort by scores descending
-        sort_idx = torch.argsort(scores, descending=True)
-        active_indices = active_indices[sort_idx]
-        starts = starts[sort_idx]
-        ends = ends[sort_idx]
-        scores = scores[sort_idx]
+                for j in range(len(scores)):
+                    if suppress[j]:
+                        continue
+                    for k in range(j + 1, len(scores)):
+                        if suppress[k]:
+                            continue
 
-        # Perform NMS
-        suppress = torch.zeros(len(scores), dtype=torch.bool, device=scores.device)
-        for j in range(len(scores)):
-            if suppress[j]:
-                continue
-            for k in range(j + 1, len(scores)):
-                if suppress[k]:
-                    continue
-                inter = max(0.0, min(ends[j], ends[k]) - max(starts[j], starts[k]))
-                union = max(ends[j], ends[k]) - min(starts[j], starts[k]) + 1e-10
-                iou = inter / union
-                if iou > iou_thresh:
-                    suppress[k] = True
+                        # --- IoU computation using nondirectional intervals ---
+                        inter = torch.clamp(torch.minimum(high[j], high[k]) - torch.maximum(low[j], low[k]), min=0.0)
+                        union = lengths[j] + lengths[k] - inter + 1e-10  # numerically stable
+                        iou = inter / union
 
-        # Set confidence to 0 for suppressed
-        supp_indices = active_indices[suppress]
-        confidence[i][supp_indices] = 0
+                        if iou > iou_thresh:
+                            suppress[k] = True
 
-    return {"f_start": f_start, "f_end": f_end, "class": class_prob, "confidence": confidence}
+                kept = ~suppress
+                kept_indices = active_indices[kept]
+
+        # Append the filtered tensors for this batch
+        results["f_start"].append(f_start[i][kept_indices])
+        results["f_end"].append(f_end[i][kept_indices])
+        results["class"].append(class_id[i][kept_indices])
+        results["confidence"].append(confidence[i][kept_indices])
+
+    # Compress to batched tensors cropped/padded based on first batch's M
+    if B == 0:
+        return {
+            "f_start": torch.empty((0, 0), dtype=f_start.dtype, device=device),
+            "f_end": torch.empty((0, 0), dtype=f_end.dtype, device=device),
+            "class": torch.empty((0, 0), dtype=class_id.dtype, device=device),
+            "confidence": torch.empty((0, 0), dtype=confidence.dtype, device=device),
+        }
+
+    M = len(results["f_start"][0])
+
+    batched = {
+        "f_start": torch.zeros((B, M), dtype=f_start.dtype, device=device),
+        "f_end": torch.zeros((B, M), dtype=f_end.dtype, device=device),
+        "class": torch.full((B, M), -1, dtype=class_id.dtype, device=device),
+        "confidence": torch.zeros((B, M), dtype=confidence.dtype, device=device),
+    }
+
+    for i in range(B):
+        for key in batched:
+            curr = results[key][i]
+            len_curr = len(curr)
+            crop_len = min(len_curr, M)
+            batched[key][i, :crop_len] = curr[:crop_len]
+            # Padded parts remain as initialized (0 or -1)
+
+    # Debug print
+    if DEBUG:
+        print(f"[\033[36mDebug\033[0m] Filtering, f_start: {[t.tolist() for t in results['f_start']]}, "
+              f"f_end: {[t.tolist() for t in results['f_end']]}, "
+              f"class_id: {[t.tolist() for t in results['class']]}, "
+              f"confidence: {[t.tolist() for t in results['confidence']]}")
+
+    return batched
 
 
 def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'], linestyle='--', linewidth=0.5):
@@ -97,8 +148,8 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'],
         classes = np.zeros(N, dtype=int)  # default class 0
     else:
         raise ValueError(f"[\033[31mError\033[0m] Invalid pred_boxes format: {pred_boxes}")
-
     if N == 0:
+        print(f"[\033[33mWarn\033[0m] No valid frequency lines to plot after filtering.")
         return
 
     def to_numpy(x):
@@ -139,7 +190,7 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'],
     classes = classes[valid_mask]
 
     if len(f_starts) == 0:
-        print(f"[\033[33mWarn\033[0m] No valid frequency lines to plot after filtering.")
+        print(f"[\033[33mWarn\033[0m] No valid frequency lines in generated boxes.")
         return
 
     if normalized:

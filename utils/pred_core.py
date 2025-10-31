@@ -170,12 +170,14 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
 
         elif mode == 'detection':
             # Process predictions
+            pred_boxes_tuple = None
             if results["raw_preds"] is not None:
-                det_outs = [decode_F(raw, **nms_kwargs) for raw in results["raw_preds"]]  # dict
-                starts = det_outs["f_start"][0].cpu().numpy()
-                ends = det_outs["f_end"][0].cpu().numpy()
+                det_outs = decode_F(results["raw_preds"], **nms_kwargs)  # dict
+                f_starts = det_outs["f_start"][0].cpu().numpy()
+                f_stops = det_outs["f_end"][0].cpu().numpy()
                 N_pred = det_outs["confidence"].shape[1]
-                pred_boxes_tuple = (N_pred, starts, ends)
+                classes = det_outs["class"][0].cpu().numpy()
+                pred_boxes_tuple = (N_pred, classes, f_starts, f_stops)
 
                 # Process ground truth boxes
             gt_boxes_tuple = None
@@ -189,8 +191,8 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
             # Create figure with subplots
             fig, axs = plt.subplots(3, 1, figsize=(14, 21))
 
-            def plot_spec(ax, data, title, cmap='viridis', boxes=None, normalized=False, color='red', linestyle='--',
-                          linewidth=2):
+            def plot_spec(ax, data, title, cmap='viridis', boxes=None, normalized=False, color=['red', 'green'],
+                          linestyle='--', linewidth=2):
                 """Helper function to plot spectrum data with optional boxes"""
                 im = ax.imshow(data, aspect='auto', origin='lower',
                                extent=[freq_axis[0], freq_axis[-1], 0, time_frames], cmap=cmap)
@@ -204,10 +206,9 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
             # Plot all components
             plot_spec(axs[0], clean_spec if clean_spec is not None else np.zeros_like(noisy_spec),
                       "Clean Spectrum")
-            plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis', boxes=gt_boxes_tuple, normalized=True,
-                      color='red')
+            plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis', boxes=gt_boxes_tuple, normalized=True)
             plot_spec(axs[2], denoised_spec, "Denoised Spectrum", cmap='viridis', normalized=True,
-                      boxes=pred_boxes_tuple, color='green')
+                      boxes=pred_boxes_tuple)
 
             axs[-1].set_xlabel("Frequency Channel")
             plt.tight_layout()
@@ -219,7 +220,7 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
         plot_path = plot_dir / f"pred_{idx:04d}.png"
         plt.savefig(plot_path, dpi=480, bbox_inches='tight')
         plt.close()
-        print(f"Saved plot: {plot_path}")
+        print(f"[\033[32mInfo\033[0m] Saved plot: {plot_path}")
 
 
 def pred(model: torch.nn.Module,
@@ -228,7 +229,6 @@ def pred(model: torch.nn.Module,
          device: torch.device,
          mode: str = 'detection',
          data_mode: str = "dataloader",
-         deocde_mode: str = 'soft',
          max_steps: Optional[int] = None,
          idx: Optional[int] = None,
          save_npy: bool = True,
@@ -246,10 +246,6 @@ def pred(model: torch.nn.Module,
         data_mode: Processing mode:
               "dbl" for batch mode (process single batch),
               otherwise dataloader mode (process entire dataloader)
-        deocde_mode: Decoding mode:
-              "soft" for soft decoding,
-              "argmax" for argmax decoding,
-              "none" for traditional decoding,
         max_steps: For dataloader mode, maximum number of batches to process
         idx: For batch mode, batch index (for filenames)
         save_npy: Whether to save numpy outputs
@@ -268,8 +264,7 @@ def pred(model: torch.nn.Module,
 
             # Process single batch
             results = _process_batch_core(model, data, device, mode)
-            _save_batch_results(results, idx, save_dir, model.__class__.__name__, mode, deocde_mode, save_npy, plot,
-                                **nms_kwargs)
+            _save_batch_results(results, idx, save_dir, model.__class__.__name__, mode, save_npy, plot, **nms_kwargs)
 
         else:  # Dataloader processing mode
             if max_steps is None:
@@ -281,5 +276,5 @@ def pred(model: torch.nn.Module,
                     break
 
                 results = _process_batch_core(model, batch, device, mode)
-                _save_batch_results(results, batch_idx, save_dir, model.__class__.__name__, mode, deocde_mode, save_npy,
-                                    plot, **nms_kwargs)
+                _save_batch_results(results, batch_idx, save_dir, model.__class__.__name__, mode, save_npy, plot,
+                                    **nms_kwargs)

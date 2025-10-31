@@ -13,13 +13,13 @@ from PyQt5.QtWidgets import (QWidget, QToolTip, QLabel,
 
 from pipeline.metrics import execute_hits_hough
 from pipeline.pipeline_processor import SETIPipelineProcessor
-from utils.det_utils import decode_F, nms_1d, plot_F_lines
+from utils.det_utils import decode_F, plot_F_lines
 
 
 class SETIWaterfallRenderer(QWidget):
-    def __init__(self, dataset, model, device, mode='detection', log_dir=Path("./pipeline/log"),
-                 verbose=False, parent=None, drift=[-4.0, 4.0], snr_threshold=5.0,
-                 min_abs_drift=0.05, nms_iou_thresh=0.5, nms_score_thresh=0.5, nms_top_k=10):
+    def __init__(self, dataset, model, device, mode='detection', log_dir=Path("./pipeline/log"), verbose=False,
+                 parent=None, drift=[-4.0, 4.0], snr_threshold=5.0, min_abs_drift=0.05, iou_thresh=0.5,
+                 score_thresh=0.5, top_k=10):
         """
         Initialize the SETI waterfall renderer with dataset and model
 
@@ -33,24 +33,24 @@ class SETIWaterfallRenderer(QWidget):
             drift: Drift rate range for mask mode [min_drift, max_drift] in Hz/s
             snr_threshold: SNR threshold for mask mode hits detection
             min_abs_drift: Minimum absolute drift rate for mask mode
-            nms_iou_thresh: IoU threshold for detection mode NMS
-            nms_score_thresh: Confidence threshold for detection mode NMS
-            nms_top_k: Maximum number of detections to keep per patch
+            iou_thresh: IoU threshold for detection mode NMS
+            score_thresh: Confidence threshold for detection mode NMS
+            top_k: Maximum number of detections to keep per patch
         """
         super().__init__(parent)
         self.mode = mode
         self.drift = drift
         self.snr_threshold = snr_threshold
         self.min_abs_drift = min_abs_drift
-        self.nms_iou_thresh = nms_iou_thresh
-        self.nms_score_thresh = nms_score_thresh
-        self.nms_top_k = nms_top_k
+        self.nms_iou_thresh = iou_thresh
+        self.nms_score_thresh = score_thresh
+        self.nms_top_k = top_k
 
         # Initialize processor with mode-specific parameters
         self.processor = SETIPipelineProcessor(
             dataset, model, device, mode=mode, log_dir=log_dir, verbose=verbose,
             drift=drift, snr_threshold=snr_threshold, min_abs_drift=min_abs_drift,
-            nms_iou_thresh=nms_iou_thresh, nms_score_thresh=nms_score_thresh, nms_top_k=nms_top_k
+            iou_thresh=iou_thresh, score_thresh=score_thresh, top_k=top_k
         )
 
         self.dataset = self.processor.dataset
@@ -175,7 +175,7 @@ class SETIWaterfallRenderer(QWidget):
         if self.mode == 'mask':
             self.confidence_label = QLabel("Detection Threshold: >0.8 or <0.2")
         else:
-            self.confidence_label = QLabel(f"Detection Threshold: >{nms_score_thresh}")
+            self.confidence_label = QLabel(f"Detection Threshold: >{score_thresh}")
         info_layout.addWidget(self.confidence_label)
 
         # Control buttons
@@ -303,38 +303,27 @@ class SETIWaterfallRenderer(QWidget):
         self.processed_label.setText(f"Processed: {processed}")
         self.detections_label.setText(f"Detections: {detections}")
 
-    def _process_detection_predictions(self, raw_preds, freq_range):
+    def _process_detection_predictions(self, raw_preds):
         """
         Process detection mode predictions to extract frequency intervals
 
         Args:
             raw_preds: Raw detection predictions from model
-            freq_range: Frequency range tuple (min_freq, max_freq) in MHz
 
         Returns:
             pred_boxes_tuple: Tuple (N, f_starts, f_stops) for plotting
         """
         # Decode predictions
-        det_outs = [decode_F(raw) for raw in raw_preds]  # List of (B, N_i, 3)
-        det_out = torch.cat(det_outs, dim=1)  # (B, total_N, 3)
+        det_outs = decode_F(raw_preds, iou_thresh=self.nms_iou_thresh, score_thresh=self.nms_score_thresh)  # dict
+        f_starts = det_outs["f_start"][0].cpu().numpy()
+        f_stops = det_outs["f_end"][0].cpu().numpy()
+        classes = det_outs["class"][0].cpu().numpy()
+        N_pred = det_outs["confidence"].shape[1]
 
-        # Apply NMS
-        pred_boxes_list = nms_1d(det_out,
-                                 iou_thresh=self.nms_iou_thresh,
-                                 score_thresh=self.nms_score_thresh,
-                                 top_k=self.nms_top_k)
+        if N_pred == 0:
+            return 0, [], []
 
-        # Process detections for the first batch item (assuming B=1)
-        pred_boxes = pred_boxes_list[0]  # (M, 3) - [f_start, f_stop, confidence]
-
-        if len(pred_boxes) == 0:
-            return (0, [], [])
-
-        # Extract start and stop frequencies (normalized)
-        f_starts = pred_boxes[:, 0].cpu().numpy()
-        f_stops = pred_boxes[:, 1].cpu().numpy()
-
-        return (len(pred_boxes), f_starts, f_stops)
+        return N_pred, classes, f_starts, f_stops
 
     def show_cell_detail(self, row, col):
         """
@@ -357,7 +346,6 @@ class SETIWaterfallRenderer(QWidget):
                 raw_preds = None
             else:  # detection mode
                 denoised, raw_preds = self.model(patch_data)
-                logits = torch.tensor([0.0], device=self.device)  # Default logits
 
             denoised_np = denoised.squeeze().cpu().numpy()
         patch_np = patch_data.squeeze().cpu().numpy()
@@ -407,12 +395,12 @@ class SETIWaterfallRenderer(QWidget):
 
         elif self.mode == 'detection' and raw_preds is not None:
             # Detection mode: draw frequency interval boundaries
-            pred_boxes_tuple = self._process_detection_predictions(raw_preds, freq_range)
+            pred_boxes_tuple = self._process_detection_predictions(raw_preds)
             if pred_boxes_tuple[0] > 0:
                 # Create frequency array for plotting
-                freqs = np.linspace(freq_min, freq_max, 1000)
-                plot_F_lines(axs[1], freqs, pred_boxes_tuple, normalized=True,
-                             color='red', linestyle='-', linewidth=1.5)
+                freqs = np.linspace(freq_min, freq_max, denoised_np.shape[1])
+                plot_F_lines(axs[1], freqs, pred_boxes_tuple, normalized=True, color=['red', 'green'], linestyle='-',
+                             linewidth=1.5)
 
         # Convert frequencies to absolute MHz for display
         if not df_hits.empty:
@@ -428,9 +416,7 @@ class SETIWaterfallRenderer(QWidget):
         img = QImage(fig.canvas.buffer_rgba(), width, height, QImage.Format_ARGB32)
 
         # Downscale to QLabel size → keeps sharpness
-        pixmap = QPixmap.fromImage(img).scaled(
-            270, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
+        pixmap = QPixmap.fromImage(img).scaled(270, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
         self.image_label.setPixmap(pixmap)
         self.image_label.setFixedSize(270, 300)

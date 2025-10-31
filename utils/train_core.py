@@ -243,7 +243,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                 with torch.no_grad():
                     if mode == 'detection':
                         denoised, raw_preds = model(noisy)
-                        total_loss, metrics = criterion(raw_preds, denoised, clean, gt_boxes, det_level_weights)
+                        total_loss, metrics = criterion(raw_preds, denoised, clean, gt_boxes)
                     else:
                         denoised, rfi_mask, plogits = model(noisy)
                         total_loss, metrics = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)

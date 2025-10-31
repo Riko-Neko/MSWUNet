@@ -18,9 +18,6 @@ from utils.pred_core import pred
 # Prediction modes
 pmode = "detection"
 # pmode = "mask"
-# dmode = "none"
-dmode = "edge"
-# dmode = "argmax"
 
 # Data config
 patch_t = 116
@@ -62,10 +59,10 @@ YY_dir = "./data/YY/"
 obs_file_path = "./data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil"
 # obs_file_path = "./data/33exoplanets/HD-180617_M04_pol1_f1400.00-1410.00.fil"
 # obs_file_path = './data/33exoplanets/'
-obs_file_path = obs_file_path if ignore_polarization else [XX_dir, YY_dir]
+obs_file_path = [XX_dir, YY_dir] if ignore_polarization else obs_file_path
 
 # Prediction config
-batch_size = 1  # Fixed to 1 for now
+batch_size = 1  # ⚠️Fixed to 1 for now, cannot use batch_size > 1, which will break the data.
 num_workers = 0
 pred_dir = "./pred_results"
 pred_steps = 100
@@ -75,9 +72,11 @@ unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 P = 2
 
 # NMS config
-iou_thresh = 0.99
-score_thresh = 0.1
-top_k = None
+nms_kargs = dict(
+    iou_thresh=1.,
+    score_thresh=0.)
+if pmode == 'yolo':
+    nms_kargs['top_k'] = None
 
 # hits conf info
 drift = [-4.0, 4.0]
@@ -161,7 +160,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
 
     def load_model(model_class, checkpoint_path, **kwargs):
         model = model_class(**kwargs).to(device)
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'], strict=False)
         model.eval()
         return model
@@ -180,12 +179,10 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
             print(f"[\033[32mInfo\033[0m] Processing sample {idx + 1}/{pred_steps}")
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
             pred(dwtnet, data_mode='dbl', mode=pmode, data=batch, idx=idx, save_dir=pred_dir, device=device,
-                 deocde_mode=dmode, save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k,
-                 score_thresh=score_thresh, )
+                 save_npy=False, plot=True, **nms_kargs)
             print("[\033[32mInfo\033[0m] Running UNet inference...")
             pred(unet, data_mode='dbl', mode=pmode, data=batch, idx=idx, save_dir=pred_dir, device=device,
-                 deocde_mode=dmode, save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k,
-                 score_thresh=score_thresh, )
+                 save_npy=False, plot=True, **nms_kargs)
 
 
     elif mode == "pipeline":
@@ -289,8 +286,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                 app = QApplication(sys.argv)
                 renderer = SETIWaterfallRenderer(dataset, model, device, mode=pmode, log_dir=f_log_dir, drift=drift,
                                                  snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
-                                                 verbose=verbose, nms_iou_thresh=iou_thresh,
-                                                 nms_score_thresh=score_thresh, nms_top_k=top_k)
+                                                 verbose=verbose, **nms_kargs)
                 renderer.setWindowTitle(f"SETI Waterfall Data Processor - {f_log_dir}")
                 renderer.show()
                 if idx == len(file_list) - 1:
@@ -302,8 +298,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                 print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
                 processor = SETIPipelineProcessor(dataset, model, device, mode=pmode, log_dir=f_log_dir, drift=drift,
                                                   snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
-                                                  verbose=verbose, nms_iou_thresh=iou_thresh,
-                                                  nms_score_thresh=score_thresh, nms_top_k=top_k)
+                                                  verbose=verbose, **nms_kargs)
                 processor.process_all_patches()
 
     else:
@@ -313,16 +308,14 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
         if execute0:
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
             dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
-            pred(dwtnet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, deocde_mode=dmode,
-                 max_steps=pred_steps, save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k,
-                 score_thresh=score_thresh)
+            pred(dwtnet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
+                 save_npy=False, plot=True, **nms_kargs)
         # --- 推理 UNet ---
         if execute1:
             print("[\033[32mInfo\033[0m] Running UNet inference...")
             unet = load_model(UNet, unet_ckpt, **unet_args)
-            pred(unet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, deocde_mode=dmode,
-                 max_steps=pred_steps, save_npy=False, plot=True, iou_thresh=iou_thresh, top_k=top_k,
-                 score_thresh=score_thresh)
+            pred(unet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
+                 save_npy=False, plot=True, **nms_kargs)
 
 
 if __name__ == "__main__":
