@@ -241,9 +241,9 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             f_stops.append(f_stop)
 
             if path_type == 'constant' or low_squared_drift == True:
-                classes.append(1.)
+                classes.append(1)
             else:
-                classes.append(0.)
+                classes.append(0)
 
     signal_spec = frame.get_data(db=False).copy()
 

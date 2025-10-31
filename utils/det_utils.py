@@ -221,78 +221,86 @@ def nms_1d(det_out: torch.Tensor, iou_thresh: float = 0.5, top_k: Optional[int] 
 
 def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'], linestyle='--', linewidth=0.5):
     """
-    Plot detected frequency intervals as vertical lines on a 1D frequency plot.
+    Plot detected frequency start/stop as **vertical lines** (not boxes).
+    Preserves physical meaning: f_start > f_stop means negative drift.
+    Supports arbitrary class IDs with strict color validation.
 
     Args:
         ax (matplotlib.axes.Axes): The axis to plot on.
-        freqs (array-like): Array of frequency values.
+        freqs (array-like): Array of frequency values (length = fchans).
         pred_boxes (tuple): (N, classes, f_starts, f_stops)
-            - N: number of intervals
-            - classes: list/array of class ids (0 or 1)
-            - f_starts: list/array of start indices (or normalized [0,1] values)
-            - f_stops: list/array of stop indices (or normalized [0,1] values)
-        normalized (bool): Whether the boxes are normalized to [0, 1].
-        color (str | list[str]): Either a single color string (e.g., 'red')
-                                 or a list of two colors [color_class0, color_class1].
-        linestyle (str): Line style.
-        linewidth (float): Line width.
+            - N: int, number of signals
+            - classes: list/array of int class IDs (>=0)
+            - f_starts: list/array of start freq (normalized or pixel)
+            - f_stops:  list/array of stop freq
+        normalized (bool): If True, f_starts/f_stops in [0,1]
+        color (list[str]): List of colors, must have length >= (max_class_id + 1)
+        linestyle, linewidth: matplotlib line style
     """
     if len(pred_boxes) == 4:
         N, classes, f_starts, f_stops = pred_boxes
     elif len(pred_boxes) == 3:
         N, f_starts, f_stops = pred_boxes
-        classes = np.ones_like(f_starts, dtype=int)
+        classes = np.zeros(N, dtype=int)  # default class 0
     else:
         raise ValueError(f"[\033[31mError\033[0m] Invalid pred_boxes format: {pred_boxes}")
 
     if N == 0:
         return
 
-    # --- 统一颜色配置 ---
-    if isinstance(color, str):
-        colors = [color, color]
-    elif isinstance(color, (list, tuple)) and len(color) == 2:
-        colors = list(color)
-    else:
-        raise ValueError("[\033[31mError\033[0m] `color` must be a string or a list/tuple of two color strings.")
-
     def to_numpy(x):
         if isinstance(x, list):
-            x = torch.cat([t.flatten() for t in x]) if len(x) > 0 else torch.tensor([])
+            if len(x) > 0 and isinstance(x[0], torch.Tensor):
+                x = torch.cat([t.flatten() for t in x])
+            else:
+                x = np.array(x)
+        if isinstance(x, torch.Tensor):
             return x.cpu().numpy()
-        elif torch.is_tensor(x):
-            return x.cpu().numpy()
-        else:
-            return np.asarray(x)
+        return np.asarray(x)
 
-    classes = to_numpy(classes)
+    classes = to_numpy(classes).astype(int)
     f_starts = to_numpy(f_starts)
     f_stops = to_numpy(f_stops)
 
+    if np.any(classes < 0):
+        raise ValueError(f"[\033[31mError\033[0m] Class IDs must be >= 0. Got: {classes}")
+
+    max_class_id = int(classes.max())
+    if color is None or not isinstance(color, (list, tuple)):
+        raise ValueError("[\033[31mError\033[0m] `color` must be a list of color strings.")
+    if len(color) <= max_class_id:
+        raise ValueError(
+            f"[\033[31mError\033[0m] Not enough colors: need {max_class_id + 1}, got {len(color)}. "
+            f"Class IDs present: {np.unique(classes).tolist()}"
+        )
+    colors = list(color)
+
     valid_mask = (np.isfinite(f_starts) & np.isfinite(f_stops))
     if normalized:
-        valid_mask &= ((f_starts >= 0) & (f_starts <= 1) &
-                       (f_stops >= 0) & (f_stops <= 1))
+        valid_mask &= (f_starts >= 0) & (f_starts <= 1) & (f_stops >= 0) & (f_stops <= 1)
     else:
-        valid_mask &= ((f_starts >= 0) & (f_starts < len(freqs)) &
-                       (f_stops >= 0) & (f_stops < len(freqs)))
+        valid_mask &= (f_starts >= 0) & (f_starts < len(freqs)) & (f_stops >= 0) & (f_stops < len(freqs))
 
     f_starts = f_starts[valid_mask]
     f_stops = f_stops[valid_mask]
     classes = classes[valid_mask]
-    N_valid = len(f_starts)
-    if N_valid == 0:
-        print(f"[\033[33mWarn\033[0m] No valid boxes after filtering in plot_F_lines")
+
+    if len(f_starts) == 0:
+        print(f"[\033[33mWarn\033[0m] No valid frequency lines to plot after filtering.")
         return
 
     if normalized:
-        f_starts = np.rint(f_starts * (len(freqs) - 1)).astype(int)
-        f_stops = np.rint(f_stops * (len(freqs) - 1)).astype(int)
+        scale = len(freqs) - 1
+        start_idx = np.rint(f_starts * scale).astype(int)
+        stop_idx = np.rint(f_stops * scale).astype(int)
     else:
-        f_starts = f_starts.astype(int)
-        f_stops = f_stops.astype(int)
+        start_idx = f_starts.astype(int)
+        stop_idx = f_stops.astype(int)
 
-    for cls, f_start, f_stop in zip(classes, f_starts, f_stops):
-        col = colors[int(cls)] if int(cls) < len(colors) else colors[0]
-        ax.axvline(freqs[f_start], color=col, linestyle=linestyle, linewidth=linewidth)
-        ax.axvline(freqs[f_stop], color=col, linestyle=linestyle, linewidth=linewidth)
+    start_idx = np.clip(start_idx, 0, len(freqs) - 1)
+    stop_idx = np.clip(stop_idx, 0, len(freqs) - 1)
+
+    for cls, s_idx, e_idx in zip(classes, start_idx, stop_idx):
+        col = colors[cls]
+        ax.axvline(freqs[s_idx], color=col, linestyle=linestyle, linewidth=linewidth, alpha=0.8)
+        ax.axvline(freqs[e_idx], color=col, linestyle=linestyle, linewidth=linewidth, alpha=0.8)

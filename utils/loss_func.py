@@ -7,7 +7,119 @@ import torch.nn.functional as F
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 """
-Loss and target-building utilities for 1D (frequency) object detection.
+Utils for commom use in loss functions.
+"""
+
+
+def _valid_gt_mask(gt_starts: torch.Tensor, gt_stops: torch.Tensor) -> torch.Tensor:
+    """Return boolean mask of valid GTs (finite and in range)."""
+    valid = torch.isfinite(gt_starts) & torch.isfinite(gt_stops)
+    return valid
+
+
+"""
+Seperate loss for 1D (frequency) feature extraction & yolo-based object detection.
+
+Provides:
+- build_target_yolo(targets_list, S, C, device):
+    maps ground-truth boxes (per image) -> target tensor (B, S, S, 5+C)
+
+Design notes:
+- This is a simplified version of the YOLO target map format, where each cell
+  contains a single object (no multi-object support).
+
+"""
+
+
+# ----- Build target map from list of (N,5) -> (B,S,S,5+C) -----
+def build_target_yolo(targets_list, S: int, C: int, device: torch.device):
+    """
+    Convert a batch of ground truth boxes (per image) into YOLO-style target map.
+
+    Args:
+        targets_list (List[Tensor]): List of length B.
+            Each entry is a tensor of shape (N, 5) or (5,) containing:
+            [class_id, cx, cy, w, h] where (cx, cy, w, h) are normalized in [0,1].
+        S (int): Grid size (S x S).
+        C (int): Number of classes.
+        device (torch.device): Target device.
+
+    Returns:
+        target_map (Tensor): Shape (B, S, S, 5 + C)
+            Channels:
+                0: objectness flag (1.0 if object exists)
+                1: x-center relative to cell [0,1]
+                2: y-center relative to cell [0,1]
+                3: width (normalized to image)
+                4: height (normalized to image)
+                5:5+C: one-hot class vector
+    """
+    B = len(targets_list)
+    target_map = torch.zeros((B, S, S, 5 + C), dtype=torch.float32, device=device)
+
+    for bi, gt in enumerate(targets_list):
+        if gt is None or gt.numel() == 0:
+            continue
+
+        # Ensure (N, 5) float tensor on correct device
+        if gt.ndim == 1 and gt.shape[0] == 5:
+            gt = gt.unsqueeze(0)
+        gt = gt.to(dtype=torch.float32, device=device)
+
+        # --------------------------------------------------------------
+        # 1. Filter invalid GT boxes using _valid_gt_mask
+        # --------------------------------------------------------------
+        gt_cx = gt[:, 1]  # center x
+        gt_cy = gt[:, 2]  # center y
+        valid_mask = _valid_gt_mask(gt_cx, gt_cy)
+
+        # Also ensure width and height are positive
+        valid_mask = valid_mask & (gt[:, 3] > 0.0) & (gt[:, 4] > 0.0)
+
+        if not valid_mask.any():
+            continue  # No valid boxes in this image
+        gt = gt[valid_mask]
+
+        # --------------------------------------------------------------
+        # 2. Map valid boxes to YOLO grid cells
+        # --------------------------------------------------------------
+        cls = gt[:, 0].long()  # class ID
+        cx = gt[:, 1].clamp_(0.0, 0.9999)
+        cy = gt[:, 2].clamp_(0.0, 0.9999)
+        w = gt[:, 3]
+        h = gt[:, 4]
+
+        # Compute grid cell indices
+        cell_x = (cx * S).long()
+        cell_y = (cy * S).long()
+
+        # Relative coordinates within the cell
+        cx_in_cell = cx * S - cell_x.float()
+        cy_in_cell = cy * S - cell_y.float()
+
+        # Fill target map (vectorized over all boxes in this image)
+        target_map[bi, cell_y, cell_x, 0] = 1.0  # objectness
+        target_map[bi, cell_y, cell_x, 1] = cx_in_cell
+        target_map[bi, cell_y, cell_x, 2] = cy_in_cell
+        target_map[bi, cell_y, cell_x, 3] = w
+        target_map[bi, cell_y, cell_x, 4] = h
+
+        # One-hot class encoding (safe modulo C)
+        cls = cls % C
+        class_indices = 5 + cls
+        rows = torch.arange(bi, bi + 1, device=device).unsqueeze(-1).expand(-1, len(cls))
+        cols = cell_y.unsqueeze(0), cell_x.unsqueeze(0), class_indices.unsqueeze(0)
+        target_map.index_put_(
+            (rows, cell_y.unsqueeze(0), cell_x.unsqueeze(0), class_indices.unsqueeze(0)),
+            torch.ones_like(class_indices, dtype=torch.float32),
+            accumulate=True
+        )
+
+    return target_map
+
+
+"""
+Conbined loss for 1D (frequency) object detection.
 
 Provides:
 - build_targets_freq_vectorized_no_time(gt_boxes, P, F, device, clip=True):
@@ -31,14 +143,8 @@ Design notes:
 """
 
 
-def _valid_gt_mask(gt_starts: torch.Tensor, gt_stops: torch.Tensor) -> torch.Tensor:
-    """Return boolean mask of valid GTs (finite and in range)."""
-    valid = torch.isfinite(gt_starts) & torch.isfinite(gt_stops)
-    return valid
-
-
-def build_targets_freq_vectorized_no_time(gt_boxes: torch.Tensor, P: int, F: int, device: Optional[torch.device] = None,
-                                          clip: bool = True) -> Tuple[torch.Tensor, torch.Tensor, int]:
+def build_targets_F_nT(gt_boxes: torch.Tensor, P: int, F: int, device: Optional[torch.device] = None,
+                       clip: bool = True) -> Tuple[torch.Tensor, torch.Tensor, int]:
     """
     Vectorized target builder that does NOT expand across time.
 
@@ -125,15 +231,15 @@ def build_targets_freq_vectorized_no_time(gt_boxes: torch.Tensor, P: int, F: int
     return targets, pos_mask, n_pos
 
 
-def build_targets_freq_vectorized_with_time(gt_boxes: torch.Tensor, P: int, T: int, F: int,
-                                            device: Optional[torch.device] = None, clip: bool = True) -> Tuple[
+def build_targets_F_T(gt_boxes: torch.Tensor, P: int, T: int, F: int, device: Optional[torch.device] = None,
+                      clip: bool = True) -> Tuple[
     torch.Tensor, torch.Tensor, int]:
     """
     Vectorized builder that returns targets with a time dimension by broadcasting the
     no-time targets across T. Keeps backward-compatible shape (B,P,3,T,F).
     """
-    targets_no_time, pos_mask, n_pos = build_targets_freq_vectorized_no_time(gt_boxes, P=P, F=F, device=device,
-                                                                             clip=clip)
+    targets_no_time, pos_mask, n_pos = build_targets_F_nT(gt_boxes, P=P, F=F, device=device,
+                                                          clip=clip)
     # targets_no_time: (B,P,3,F) -> expand to (B,P,3,T,F)
     B = targets_no_time.size(0)
     targets_time = targets_no_time.unsqueeze(3).expand(B, -1, -1, T, -1).contiguous()
@@ -239,8 +345,8 @@ class FreqDetectionLoss(nn.Module):
         # choose behavior according to temporal aggregation mode
         if self.temporal_agg == 'none':
             # build per-time targets
-            targets, pos_mask, n_pos = build_targets_freq_vectorized_with_time(gt_boxes, P=self.P, T=T, F=_F,
-                                                                               device=self.device)
+            targets, pos_mask, n_pos = build_targets_F_T(gt_boxes, P=self.P, T=T, F=_F,
+                                                         device=self.device)
 
             pred_start = raw_preds[:, :, 0, :, :]  # (B,P,T,F)
             pred_stop = raw_preds[:, :, 1, :, :]
@@ -278,8 +384,8 @@ class FreqDetectionLoss(nn.Module):
 
         else:
             # build no-time targets (B,P,3,F)
-            targets_nt, pos_mask_nt, n_pos = build_targets_freq_vectorized_no_time(gt_boxes, P=self.P, F=_F,
-                                                                                   device=self.device)
+            targets_nt, pos_mask_nt, n_pos = build_targets_F_nT(gt_boxes, P=self.P, F=_F,
+                                                                device=self.device)
 
             pred_start = raw_preds[:, :, 0, :, :]  # (B,P,T,F)
             pred_stop = raw_preds[:, :, 1, :, :]
