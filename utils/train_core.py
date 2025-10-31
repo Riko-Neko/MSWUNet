@@ -180,7 +180,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                     'loc': det_loss_loc.item(),
                     'class': det_loss_class.item(),
                     'conf': det_loss_conf.item(),
-                    'n_matched': det_n_matched.item(),
+                    'n_matched': det_n_matched,
                     'λ': lambda_denoise.item() if hasattr(lambda_denoise, 'item') else lambda_denoise
                 })
             else:
