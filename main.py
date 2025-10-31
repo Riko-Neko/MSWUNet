@@ -33,11 +33,12 @@ from torch.utils.data import DataLoader
 from torchinfo import summary
 
 from gen.SETIdataset import DynamicSpectrumDataset
-from model.DWTNet import DWTNet
-from utils.loss_func import DetectionCombinedLoss
+from model.DetDWTNet import DWTNet
+from utils.loss_func import DetectionCombinedLoss, MaskCombinedLoss
 from utils.train_core import train_model
 
 # modes
+# mode = 'yolo'
 mode = "detection"
 # mode = "mask"
 
@@ -79,7 +80,6 @@ force_save_best = True
 # checkpoint_dir = "./checkpoints/unet"
 checkpoint_dir = "./checkpoints/dwtnet"
 det_level_weights = None
-P = 2
 
 # Model config
 dwtnet_args = dict(
@@ -88,10 +88,29 @@ dwtnet_args = dict(
     levels=[2, 4, 8, 16],
     wavelet_name='db4',
     extension_mode='periodization',
-    P=P,
-    use_spp=True,
-    use_pan=True)
+    N=10,
+    num_classes=2,
+    dropout=0.05)
 unet_args = dict()
+
+regress_loss_args = dict(
+    lambda_denoise=1.0,
+    loss_type='mse',
+    lambda_learnable=False,
+    regression_loss_kwargs=dict(
+        w_loc=1.0,
+        w_class=1.0,
+        w_conf=1.0,
+        eps=1e-8)
+)
+
+mask_loss_args = dict(
+    alpha=1.0,
+    beta=0.,
+    gamma=0.,
+    delta=0.,
+    momentum=0.99,
+    fixed_g_d=True)
 
 
 # Main function
@@ -139,20 +158,17 @@ def main():
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
     valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
 
-    # Initialize model (assuming DWTNet outputs two tensors)
-    model = DWTNet(**dwtnet_args)
-    # model = UNet(**unet_args)
+    # Loss function and optimizer
+    if mode == "detection":
+        model = DWTNet(**dwtnet_args)
+        # model = UNet(**unet_args)
+        criterion = DetectionCombinedLoss(**regress_loss_args)
+    else:  # "mask" as default
+        model = DWTNet(**dwtnet_args)
+        # model = UNet(**unet_args)
+        criterion = MaskCombinedLoss(device, **mask_loss_args)
 
     summary(model, input_size=(1, 1, 116, 1024))
-
-    # Loss function and optimizer
-    # criterion = MaskCombinedLoss(device, alpha=1.0, beta=0., gamma=0., delta=0., momentum=0.99, fixed_g_d=True)
-    criterion = DetectionCombinedLoss(P=P, lambda_denoise=1, loss_type='mse', avg_time=False, lambda_learnable=False,
-                                      device=device, detection_loss_kwargs={'lambda_coord': 5.0,
-                                                                            'noobj_weight': 0.5,
-                                                                            'temporal_agg': 'edge',
-                                                                            'reg_loss_type': 'smoothl1',
-                                                                            'temp': 0.5})
 
     optimizer = optim.Adam(list(model.parameters()) + list(criterion.parameters()), lr=5e-4, weight_decay=1e-7)
 

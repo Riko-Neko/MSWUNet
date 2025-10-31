@@ -33,7 +33,7 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                     "epoch,global_step,total_loss,spectrum_loss,ssim_loss,rfi_loss,detection_loss,alpha,beta,gamma,delta\n")
             elif mode == 'detection':
                 f.write(
-                    "epoch,global_step,total_loss,detection_loss,denoise_loss,det_loss_reg,det_loss_conf,det_n_pos,lambda_denoise\n")
+                    "epoch,global_step,total_loss,detection_loss,denoise_loss,loc_loss,class_loss,conf_loss,n_matched,lambda_denoise\n")
 
     if resume_from and os.path.exists(epoch_log_file):
         # Load existing epoch log
@@ -82,6 +82,27 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
     else:
         print("[\033[32mInfo\033[0m] Starting training from scratch.")
 
+    total_loss = 0.
+    mask = None
+    pprob = None
+    spectrum_loss = None
+    ssim_loss = None
+    rfi_loss = None
+    pdet_loss = None
+    current_alpha = None
+    current_beta = None
+    current_gamma = None
+    current_delta = None
+    gt_boxes = None
+    raw_preds = None
+    denoise_loss = None
+    detection_loss = None
+    det_loss_loc = None
+    det_loss_class = None
+    det_loss_conf = None
+    det_n_matched = None
+    lambda_denoise = None
+
     # Training loop
     for epoch in range(start_epoch, num_epochs):
         epoch_start = time.time()
@@ -95,34 +116,44 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
         for step in range(steps_per_epoch):
             try:
-                if mode == 'mask':
-                    noisy, clean, mask, pprob = next(iter(train_dataloader))
-                elif mode == 'detection':
+                if mode == 'detection':
                     noisy, clean, gt_boxes = next(iter(train_dataloader))
+                else:  # "mask" as default
+                    noisy, clean, mask, pprob = next(iter(train_dataloader))
             except StopIteration:
                 train_dataloader = iter(train_dataloader)
-                if mode == 'mask':
-                    noisy, clean, mask, pprob = next(train_dataloader)
-                elif mode == 'detection':
+                if mode == 'detection':
                     noisy, clean, gt_boxes = next(train_dataloader)
+                else:  # "mask" as default
+                    noisy, clean, mask, pprob = next(train_dataloader)
 
             noisy = noisy.to(device)
             clean = clean.to(device)
 
-            if mode == 'mask':
+            if mode == 'detection':
+                gt_boxes = gt_boxes.to(device)
+            else:
                 mask = mask.to(device)
                 pprob = pprob.to(device)
-            elif mode == 'detection':
-                gt_boxes = gt_boxes.to(device)
 
             # Forward pass
-            if mode == 'mask':
-                denoised, rfi_mask, plogits = model(noisy)
-            elif mode == 'detection':
+            if mode == 'detection':
                 denoised, raw_preds = model(noisy)
+            else:
+                denoised, rfi_mask, plogits = model(noisy)
 
             # Calculate loss
-            if mode == 'mask':
+
+            if mode == 'detection':
+                total_loss, metrics = criterion(raw_preds=raw_preds, denoised=denoised, clean=clean, gt_boxes=gt_boxes)
+                detection_loss = metrics["detection_loss"]
+                denoise_loss = metrics["denoise_loss"]
+                det_loss_loc = metrics["loc_loss"]
+                det_loss_class = metrics["class_loss"]
+                det_loss_conf = metrics["conf_loss"]
+                det_n_matched = metrics["matched_count"]
+                lambda_denoise = metrics["lambda_denoise"]
+            else:  # "mask" as default
                 total_loss, metrics = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
                 spectrum_loss = metrics["spectrum_loss"]
                 ssim_loss = metrics["ssim_loss"]
@@ -132,14 +163,6 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                 current_beta = metrics["beta"]
                 current_gamma = metrics["gamma"]
                 current_delta = metrics["delta"]
-            elif mode == 'detection':
-                total_loss, metrics = criterion(raw_preds=raw_preds, denoised=denoised, clean=clean, gt_boxes=gt_boxes)
-                detection_loss = metrics["detection_loss"]
-                denoise_loss = metrics["denoise_loss"]
-                det_loss_reg = metrics["det_loss_reg"]
-                det_loss_conf = metrics["det_loss_conf"]
-                det_n_pos = metrics["det_n_pos"]
-                lambda_denoise = metrics["lambda_denoise"]
 
             epoch_losses.append(total_loss.item())
 
@@ -149,7 +172,18 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
             optimizer.step()
 
             # Update progress bar
-            if mode == 'mask':
+            if mode == 'detection':
+                train_progress.set_postfix({
+                    'loss': total_loss.item(),
+                    'deno': denoise_loss,
+                    'det': detection_loss,
+                    'loc': det_loss_loc,
+                    'class': det_loss_class,
+                    'conf': det_loss_conf,
+                    'n_matched': det_n_matched,
+                    'λ': lambda_denoise.item() if hasattr(lambda_denoise, 'item') else lambda_denoise
+                })
+            else:
                 train_progress.set_postfix({
                     'loss': total_loss.item(),
                     'spec': spectrum_loss.item(),
@@ -161,29 +195,18 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
                     'γ': current_gamma,
                     'δ': current_delta
                 })
-            elif mode == 'detection':
-                train_progress.set_postfix({
-                    'loss': total_loss.item(),
-                    'deno': denoise_loss,
-                    'det': detection_loss,
-                    'reg': det_loss_reg,
-                    'conf': det_loss_conf,
-                    'n_pos': det_n_pos,
-                    'λ': lambda_denoise.item() if hasattr(lambda_denoise, 'item') else lambda_denoise
-                })
+
             train_progress.update(1)
 
             # Log step data
             if step % log_interval == 0:
                 with open(step_log_file, 'a') as f:
-                    if mode == 'mask':
-                        f.write(f"{epoch},{criterion.step},{total_loss.item():.6f},"
-                                f"{spectrum_loss.item():.6f},{ssim_loss.item():.6f},{rfi_loss.item():.6f},{pdet_loss.item():.6f},"
-                                f"{current_alpha:.4f},{current_beta:.4f},{current_gamma:.4f},{current_delta:.4f}\n")
-                    elif mode == 'detection':
-                        f.write(f"{epoch},{step},{total_loss.item():.6f},"
-                                f"{detection_loss:.6f},{denoise_loss:.6f},"f"{det_loss_reg:.6f},{det_loss_conf:.6f},{det_n_pos},"
-                                f"{lambda_denoise.item() if hasattr(lambda_denoise, 'item') else lambda_denoise:.6f}\n")
+                    if mode == 'detection':
+                        f.write(
+                            f"{epoch},{step},{total_loss.item():.6f},"f"{detection_loss:.6f},{denoise_loss:.6f},"f"{det_loss_loc:.6f},{det_loss_class:.6f},{det_loss_conf:.6f},{det_n_matched},"f"{lambda_denoise.item() if hasattr(lambda_denoise, 'item') else lambda_denoise:.6f}\n")
+                    else:  # "mask" as default
+                        f.write(
+                            f"{epoch},{criterion.step},{total_loss.item():.6f},"f"{spectrum_loss.item():.6f},{ssim_loss.item():.6f},{rfi_loss.item():.6f},{pdet_loss.item():.6f},"f"{current_alpha:.4f},{current_beta:.4f},{current_gamma:.4f},{current_delta:.4f}\n")
 
         train_progress.close()
         avg_train_loss = np.mean(epoch_losses)
@@ -197,33 +220,33 @@ def train_model(model, train_dataloader, valid_dataloader, criterion, optimizer,
 
             for i in range(valid_steps):
                 try:
-                    if mode == 'mask':
-                        noisy, clean, mask, pprob = next(iter(valid_dataloader))
-                    elif mode == 'detection':
+                    if mode == 'detection':
                         noisy, clean, gt_boxes = next(iter(valid_dataloader))
+                    else:  # "mask" as default
+                        noisy, clean, mask, pprob = next(iter(valid_dataloader))
                 except StopIteration:
                     valid_dataloader = iter(valid_dataloader)
-                    if mode == 'mask':
-                        noisy, clean, mask, pprob = next(valid_dataloader)
-                    elif mode == 'detection':
+                    if mode == 'detection':
                         noisy, clean, gt_boxes = next(valid_dataloader)
+                    else:  # "mask" as default
+                        noisy, clean, mask, pprob = next(valid_dataloader)
 
                 noisy = noisy.to(device)
                 clean = clean.to(device)
 
-                if mode == 'mask':
+                if mode == 'detection':
+                    gt_boxes = gt_boxes.to(device)
+                else:
                     mask = mask.to(device)
                     pprob = pprob.to(device)
-                elif mode == 'detection':
-                    gt_boxes = gt_boxes.to(device)
 
                 with torch.no_grad():
-                    if mode == 'mask':
-                        denoised, rfi_mask, plogits = model(noisy)
-                        total_loss, metrics = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
-                    elif mode == 'detection':
+                    if mode == 'detection':
                         denoised, raw_preds = model(noisy)
                         total_loss, metrics = criterion(raw_preds, denoised, clean, gt_boxes, det_level_weights)
+                    else:
+                        denoised, rfi_mask, plogits = model(noisy)
+                        total_loss, metrics = criterion(denoised, rfi_mask, plogits, clean, mask, pprob)
 
                     valid_losses.append(total_loss.item())
 

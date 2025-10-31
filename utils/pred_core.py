@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from utils.det_utils import decode_F, nms_1d, plot_F_lines
+from utils.det_utils import decode_F, plot_F_lines
 
 
 def _process_batch_core(model, batch, device, mode):
@@ -34,22 +34,21 @@ def _process_batch_core(model, batch, device, mode):
     if isinstance(batch, (list, tuple)):
         inputs = batch[0].to(device)
         clean = None
-        if mode == 'mask':
-            rfi_mask = None
-            gt_boxes = None
-            if len(batch) > 1 and isinstance(batch[1], torch.Tensor):
-                clean = batch[1].to(device)
-            if len(batch) > 2 and isinstance(batch[2], torch.Tensor):
-                rfi_mask = batch[2].to(device)
-        elif mode == 'detection':
+
+        if mode == 'detection':
             rfi_mask = None
             gt_boxes = None
             if len(batch) > 1 and isinstance(batch[1], torch.Tensor):
                 clean = batch[1].to(device)
             if len(batch) > 2 and isinstance(batch[2], torch.Tensor):
                 gt_boxes = batch[2].to(device)
-        else:
-            raise ValueError(f"Unsupported mode: {mode}")
+        else:  # 'mask' as default
+            rfi_mask = None
+            gt_boxes = None
+            if len(batch) > 1 and isinstance(batch[1], torch.Tensor):
+                clean = batch[1].to(device)
+            if len(batch) > 2 and isinstance(batch[2], torch.Tensor):
+                rfi_mask = batch[2].to(device)
     else:
         inputs = batch.to(device)
         clean = None
@@ -67,10 +66,10 @@ def _process_batch_core(model, batch, device, mode):
         if len(outputs) == 3:
             denoised, pred_mask, logits = outputs  # (denoised, mask, logits) for mask
         elif len(outputs) == 2:
-            if mode == 'mask':
-                denoised, pred_mask = outputs  # (denoised, mask)
-            elif mode == 'detection':
+            if mode == 'detection':
                 denoised, raw_preds = outputs  # (denoised, raw_preds)
+            else:  # 'mask' as default
+                denoised, pred_mask = outputs  # (denoised, mask)
         else:
             denoised = outputs[0]  # Assume first is denoised
     else:
@@ -88,8 +87,8 @@ def _process_batch_core(model, batch, device, mode):
     }
 
 
-def _save_batch_results(results, idx, save_dir, model_class_name, mode='detection', deocde_mode='soft', save_npy=False,
-                        plot=True, **nms_kwargs):
+def _save_batch_results(results, idx, save_dir, model_class_name, mode='detection', save_npy=False, plot=True,
+                        **nms_kwargs):
     """
     Save and visualize results for a single batch
 
@@ -171,18 +170,14 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
 
         elif mode == 'detection':
             # Process predictions
-            pred_boxes = None
             if results["raw_preds"] is not None:
-                det_outs = [decode_F(raw, mode=deocde_mode) for raw in results["raw_preds"]]  # List of (B, N_i, 3)
-                det_out = torch.cat(det_outs, dim=1)  # (B, total_N, 3)
-                pred_boxes_list = nms_1d(det_out, **nms_kwargs)  # 一次性 NMS
-                pred_boxes = pred_boxes_list[0]  # Assuming B=1, (M, 3)
-                pred_starts = pred_boxes[:, 0].cpu().numpy()
-                pred_stops = pred_boxes[:, 1].cpu().numpy()
-                N_pred = len(pred_starts)
-                pred_boxes_tuple = (N_pred, pred_starts, pred_stops)
+                det_outs = [decode_F(raw, **nms_kwargs) for raw in results["raw_preds"]]  # dict
+                starts = det_outs["f_start"][0].cpu().numpy()
+                ends = det_outs["f_end"][0].cpu().numpy()
+                N_pred = det_outs["confidence"].shape[1]
+                pred_boxes_tuple = (N_pred, starts, ends)
 
-            # Process ground truth boxes
+                # Process ground truth boxes
             gt_boxes_tuple = None
             if results["gt_boxes"] is not None:
                 gt_boxes = results["gt_boxes"][0].cpu().numpy()  # Assuming (N_gt, 2) or similar, [start, stop]

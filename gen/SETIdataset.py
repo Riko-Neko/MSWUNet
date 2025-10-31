@@ -248,9 +248,7 @@ class DynamicSpectrumDataset(Dataset):
                 t_width /= (self.tchans - 1)
                 f_center /= (self.fchans - 1)
                 f_width /= (self.fchans - 1)
-
                 classes = torch.tensor(classes, dtype=torch.float32)
-
                 # YOLO format: [class_id, x_center, y_center, width, height]
                 gt_boxes[:N, 0] = torch.clamp(classes, 0.0, 1.0)
                 gt_boxes[:N, 1] = self.t_center
@@ -259,13 +257,15 @@ class DynamicSpectrumDataset(Dataset):
                 gt_boxes[:N, 4] = torch.clamp(f_width, 0.0, 1.0)
             return noisy_spec, clean_spec, gt_boxes
         elif self.mode == 'detection':
-            N, _, f_starts, f_stops = freq_info if freq_info else (0, [], [])
-            gt_boxes = torch.full((self.max_num_signals, 2), float('nan'), dtype=torch.float32)
+            N, classes, f_starts, f_stops = freq_info if freq_info else (0, [], [])
+            gt_boxes = torch.full((self.max_num_signals, 3), float('nan'), dtype=torch.float32)
             if N > 0:
                 starts_norm = torch.tensor(f_starts, dtype=torch.float64) / (self.fchans - 1)
                 stops_norm = torch.tensor(f_stops, dtype=torch.float64) / (self.fchans - 1)
                 gt_boxes[:N, 0] = torch.clamp(starts_norm, 0.0, 1.0)
                 gt_boxes[:N, 1] = torch.clamp(stops_norm, 0.0, 1.0)
+                classes = torch.tensor(classes, dtype=torch.float32)
+                gt_boxes[:N, 2] = torch.clamp(classes, 0.0, 1.0)
             return noisy_spec, clean_spec, gt_boxes
         elif self.mode == 'mask':
             return noisy_spec, clean_spec, rfi_mask, phy_prob

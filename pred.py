@@ -90,9 +90,9 @@ dwtnet_args = dict(
     levels=[2, 4, 8, 16],
     wavelet_name='db4',
     extension_mode='periodization',
-    P=P,
-    use_spp=False,
-    use_pan=False)
+    N=10,
+    num_classes=2,
+    dropout=0.05)
 unet_args = dict()
 
 

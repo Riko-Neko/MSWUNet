@@ -14,7 +14,3 @@ checkpoints/*/*.pth
 *.log
 *.dat
 
-# dev
-model/DWTNet.py
-model/DenseDWTNet.py
-model/DetDWTNet.py
