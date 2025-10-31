@@ -379,22 +379,7 @@ class DetectionCombinedLoss(nn.Module):
         """
         # Calculate frequency detection loss
         detection_loss, detection_metrics = self.detection_loss(raw_preds, gt_boxes)
-
-        # Calculate denoising loss
-        if self.avg_time:
-            # Average over time dimension T to get (B, C, F)
-            denoised_mean = denoised.mean(dim=2)  # (B, C, T, F) -> (B, C, F)
-            clean_mean = clean.mean(dim=2)  # (B, C, T, F) -> (B, C, F)
-            if denoised_mean.dim() == 3 and denoised_mean.size(1) > 1:
-                denoised_mean = denoised_mean.mean(dim=1)  # (B, C, F) -> (B, F)
-                clean_mean = clean_mean.mean(dim=1)  # (B, C, F) -> (B, F)
-            if self.loss_type == 'dice':
-                clean_mean = clean_mean.sigmoid()
-            denoised_loss = self.denoise_loss(denoised_mean, clean_mean)
-        else:
-            if self.loss_type == 'dice':
-                clean = clean.sigmoid()
-            denoised_loss = self.denoise_loss(denoised, clean)
+        denoised_loss = self.denoise_loss(denoised, clean)
 
         # Combine losses
         total_loss = detection_loss + self.lambda_denoise * denoised_loss
