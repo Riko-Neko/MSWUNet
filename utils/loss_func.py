@@ -3,6 +3,7 @@ from typing import Optional, List, Dict, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy.optimize import linear_sum_assignment
 from torch import nn
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
@@ -195,18 +196,21 @@ class RegressionHeadLoss(nn.Module):
     @staticmethod
     def _giou_1d_interval(s1: torch.Tensor, e1: torch.Tensor, s2: torch.Tensor, e2: torch.Tensor,
                           eps: float = 1e-8) -> torch.Tensor:
-        """Compute 1D GIoU for intervals."""
-        iou = RegressionHeadLoss._iou_1d_interval(s1, e1, s2, e2, eps)
         a1 = torch.min(s1, e1)
         b1 = torch.max(s1, e1)
         a2 = torch.min(s2, e2)
         b2 = torch.max(s2, e2)
+        inter_left = torch.max(a1, a2)
+        inter_right = torch.min(b1, b2)
+        inter = torch.clamp(inter_right - inter_left, min=0.0)
+        len1 = b1 - a1
+        len2 = b2 - a2
+        union = len1 + len2 - inter
+        union = torch.clamp(union, min=eps)
         c_left = torch.min(a1, a2)
         c_right = torch.max(b1, b2)
         convex = torch.clamp(c_right - c_left, min=eps)
-        len1 = b1 - a1
-        len2 = b2 - a2
-        union = len1 + len2 - (iou * union)  # union = len1 + len2 - inter
+        iou = inter / union
         giou = iou - (convex - union) / convex
         return giou
 
