@@ -167,20 +167,22 @@ def build_target_regression(gt_boxes: torch.Tensor, num_classes: int = 2, N: int
 
 class RegressionHeadLoss(nn.Module):
     def __init__(self, num_classes: int = 2, N: int = 10, w_loc: float = 1.0, w_class: float = 1.0, w_conf: float = 1.0,
-                 eps: float = 1e-8):
+                 w_dir: float = 1.0, eps: float = 1e-8):
         super().__init__()
         self.num_classes = num_classes
         self.N_bins = N
         self.w_loc = float(w_loc)
         self.w_class = float(w_class)
         self.w_conf = float(w_conf)
+        self.w_dir = float(w_dir)
         self.eps = float(eps)
         self.bce_logits = nn.BCEWithLogitsLoss(reduction="none")
+        self.DEBUG = False
 
     @staticmethod
-    def _iou_1d_interval(s1: torch.Tensor, e1: torch.Tensor, s2: torch.Tensor, e2: torch.Tensor,
+    def _iou_1d_directed(s1: torch.Tensor, e1: torch.Tensor, s2: torch.Tensor, e2: torch.Tensor,
                          eps: float = 1e-8) -> torch.Tensor:
-        """Compute 1D IoU for intervals (tensors). Handles unordered start/end."""
+        """Compute 1D Directed IoU for intervals (tensors). Considers direction."""
         a1 = torch.min(s1, e1)
         b1 = torch.max(s1, e1)
         a2 = torch.min(s2, e2)
@@ -191,7 +193,12 @@ class RegressionHeadLoss(nn.Module):
         union_left = torch.min(a1, a2)
         union_right = torch.max(b1, b2)
         union = torch.clamp(union_right - union_left, min=eps)
-        return inter / union
+        dir1 = e1 - s1
+        dir2 = e2 - s2
+        abs_dir1 = torch.abs(dir1)
+        abs_dir2 = torch.abs(dir2)
+        factor = dir1 * dir2 / (abs_dir1 * abs_dir2 + eps)
+        return factor * (inter / union)
 
     @staticmethod
     def _giou_1d_interval(s1: torch.Tensor, e1: torch.Tensor, s2: torch.Tensor, e2: torch.Tensor,
@@ -213,6 +220,39 @@ class RegressionHeadLoss(nn.Module):
         iou = inter / union
         giou = iou - (convex - union) / convex
         return giou
+
+    @staticmethod
+    def _ciou_1d_directed(s1, e1, s2, e2, eps: float = 1e-7):
+        """
+        1D Directed Complete IoU (Directed CIoU) — considers direction as negative contribution.
+        Faithful to YOLOv5/YOLOv8 philosophy with smooth gradient.
+        """
+        import math  # Ensure math is imported if not already
+        s1, e1, s2, e2 = s1.float(), e1.float(), s2.float(), e2.float()
+        a1, b1 = torch.min(s1, e1), torch.max(s1, e1)
+        a2, b2 = torch.min(s2, e2), torch.max(s2, e2)
+        inter = (torch.min(b1, b2) - torch.max(a1, a2)).clamp(min=0.)
+        len1 = (b1 - a1).clamp(min=eps)
+        len2 = (b2 - a2).clamp(min=eps)
+        union = (len1 + len2 - inter).clamp(min=eps)
+        iou = inter / union
+        c_left, c_right = torch.min(a1, a2), torch.max(b1, b2)
+        c_len = (c_right - c_left).clamp(min=eps)
+        center1, center2 = (a1 + b1) / 2.0, (a2 + b2) / 2.0
+        rho2 = (center1 - center2).pow(2)
+        distance_term = rho2 / (c_len.pow(2) + eps)
+        len_ratio = (len1 / len2).clamp(min=0.25, max=4.0)
+        v = (4 / (math.pi ** 2)) * torch.pow(torch.atan(len_ratio.sqrt()) - math.pi / 4, 2)
+        alpha = v / (1.0 - iou + v + eps)  # Use original iou for alpha to preserve shape penalty
+        # Direction factor (smooth, gradient-friendly)
+        dir1 = e1 - s1
+        dir2 = e2 - s2
+        abs_dir1 = torch.abs(dir1).clamp(min=eps)
+        abs_dir2 = torch.abs(dir2).clamp(min=eps)
+        factor = (dir1 * dir2) / (abs_dir1 * abs_dir2 + eps)
+        directed_iou = factor * iou
+        ciou = directed_iou - (distance_term + alpha * v)
+        return ciou.clamp(min=-1.0, max=1.0)
 
     def forward(self, pred: Dict[str, torch.Tensor], gt_boxes: torch.Tensor) -> Tuple[
         torch.Tensor, Dict[str, torch.Tensor]]:
@@ -236,59 +276,102 @@ class RegressionHeadLoss(nn.Module):
         total_loc = 0.0
         total_class = 0.0
         total_conf = 0.0
+        total_dir = 0.0
         total_matched = 0
 
         for b in range(B):
-            pres = presence_all[b]  # (K,)
-            valid_idx = torch.nonzero(pres, as_tuple=False).view(-1)
-            K = valid_idx.numel()
+            pres = presence_all[b]  # (K,) e.g.[1,1,0,...0], len=10
+            valid_idx = torch.nonzero(pres, as_tuple=False).view(-1)  # e.g.[0,1]
+            K = valid_idx.numel()  # number of valid GTs e.g.2
             if K == 0:
                 continue
 
             # gather valid GTs
-            f_start = f_start_all[b, valid_idx]  # (K,)
-            f_end = f_end_all[b, valid_idx]  # (K,)
-            s_class = classes_all[b, valid_idx, :]  # (K, C)
+            f_start = f_start_all[b, valid_idx]  # (K,) e.g.[fs1,fs2,0,...0], len=10
+            f_end = f_end_all[b, valid_idx]  # (K,) e.g.[fe1,fe2,0,...0]
+            s_class = classes_all[b, valid_idx, :]  # (K, C) e.g.[[1,0],[0,1],[0,0]...[0,0]]
 
             # Predictions for this sample
             ps = p_start[b]  # (N,) logits
-            pe = p_end[b]  # (N,)
+            pe = p_end[b]  # (N,) logits
             pcl = p_class_logits[b]  # (N, C) logits
             pconf = p_conf_logits[b] if p_conf_logits is not None else None  # (N,)
 
+            ps_sig = torch.sigmoid(ps).unsqueeze(0).expand(K, N)  # (K,N) e.g.[[ps],[ps]], K=2, len(ps)=10
+            pe_sig = torch.sigmoid(pe).unsqueeze(0).expand(K, N)  # (K,N) e.g.[[pe],[pe]]
+            f_start_mat = f_start.unsqueeze(1).expand(K, N)  # (K,N) e.g.[[fs],[fs]], K=2, len(fs)=10
+            f_end_mat = f_end.unsqueeze(1).expand(K, N)  # (K,N) e.g.[[fe],[fe]]
+
+            """
             # Build cost matrix
-            ps_sig = torch.sigmoid(ps).unsqueeze(0).expand(K, N)  # (K,N)
-            pe_sig = torch.sigmoid(pe).unsqueeze(0).expand(K, N)  # (K,N)
-            f_start_mat = f_start.unsqueeze(1).expand(K, N)
-            f_end_mat = f_end.unsqueeze(1).expand(K, N)
-            loc_mse = (ps_sig - f_start_mat).pow(2) + (pe_sig - f_end_mat).pow(2)  # (K,N)
+            loc_mse = (ps_sig - f_start_mat).pow(2) + (pe_sig - f_end_mat).pow(2)  # (K,N) pow:^2
 
             pcl_sig = torch.sigmoid(pcl).unsqueeze(0).expand(K, N, C)  # (K,N,C)
             f_class_mat = s_class.unsqueeze(1).expand(K, N, C)  # (K,N,C)
             class_l2 = (pcl_sig - f_class_mat).pow(2).sum(dim=-1)  # (K,N)
 
+            ps_sig = torch.sigmoid(ps).unsqueeze(0).expand(K, N)  # (K,N)
+            pe_sig = torch.sigmoid(pe).unsqueeze(0).expand(K, N)  # (K,N)
+            f_start_mat = f_start.unsqueeze(1).expand(K, N)  # (K,N)
+            f_end_mat = f_end.unsqueeze(1).expand(K, N)  # (K,N)
+
             cost = loc_mse + class_l2  # (K,N)
+            """
+
+            with torch.no_grad():
+                iou_mat = self._giou_1d_interval(ps_sig, pe_sig, f_start_mat, f_end_mat)  # (K,N)
+                iou_cost = 1.0 - iou_mat.clamp(min=0.0, max=1.0)
+
+                dir1 = pe_sig - ps_sig  # (K,N)
+                dir2 = f_end_mat - f_start_mat  # (K,N)
+                abs_dir1 = dir1.abs().clamp(min=self.eps)
+                abs_dir2 = dir2.abs().clamp(min=self.eps)
+                cos = (dir1 * dir2) / (abs_dir1 * abs_dir2)
+                dir_diff = (1 - cos.clamp(min=-1.0, max=1.0)) / 2.0  # (K,N) in [0,1]
+
+            pcl_sig = torch.sigmoid(pcl).unsqueeze(0).expand(K, N, C)  # (K,N,C)
+            f_class_mat = s_class.unsqueeze(1).expand(K, N, C)  # (K,N,C)
+
+            pred_norm = F.normalize(pcl_sig, dim=-1)
+            gt_norm = F.normalize(f_class_mat, dim=-1)
+            class_sim = (pred_norm * gt_norm).sum(dim=-1)  # (K,N)
+            class_cost = 1.0 - class_sim.clamp(min=-1.0, max=1.0)
+
+            cost = iou_cost + 0.5 * class_cost + 0.5 * dir_diff
 
             # Hungarian matching
-            row_ind, col_ind = linear_sum_assignment(cost.cpu().numpy())
+            row_ind, col_ind = linear_sum_assignment(cost.cpu().detach().numpy())
             pairs = [(r, c) for r, c in zip(row_ind, col_ind)]
+            if self.DEBUG:
+                print(f"[\033[36mDebug\033[0m] pairs:{pairs} in {(row_ind, col_ind)}")
 
             matched_preds = set(col_ind)
             unmatched_preds = [pj for pj in range(N) if pj not in matched_preds]
+            if self.DEBUG:
+                print(f"[\033[36mDebug\033[0m] matched_preds:{matched_preds} unmatched_preds:{unmatched_preds}")
+
+            # Cost matrix:
+            #  tensor([[0.2, 0.8, 0.6, 0.9, 0.7...],   GT0 cost to all preds, len=10
+            #          [0.5, 0.1, 0.7, 0.9, 0.8...]])  GT1 cost to all preds
+            # Matched pairs (GT_i -> Pred_j): [(0, 0), (1, 1)]
+            # Matched preds: {0, 1}
+            # Unmatched preds: [2, 3, 4, 5, 6, 7, 8, 9]
 
             loc_losses = []
             class_losses = []
             conf_losses = []
+            dir_losses = []
 
-            for (gi, pj) in pairs:
+            for (gi, pj) in pairs:  # [(0, 0), (1, 1)]
                 pred_s = torch.sigmoid(ps[pj])
                 pred_e = torch.sigmoid(pe[pj])
                 gt_s = f_start[gi]
                 gt_e = f_end[gi]
 
-                # localization loss: 1 - GIoU
+                # localization loss: 1 - CIoU/GIoU/IoU
                 giou = self._giou_1d_interval(pred_s, pred_e, gt_s, gt_e, self.eps)
                 loc_loss = 1 - giou
+
                 loc_losses.append(loc_loss)
 
                 # classification loss: BCEWithLogits between logits and target vector (sum over classes)
@@ -304,6 +387,12 @@ class RegressionHeadLoss(nn.Module):
                     conf_loss_pos = self.bce_logits(pconf[pj].unsqueeze(0), torch.tensor([1.0], device=device))
                     conf_losses.append(conf_loss_pos)
 
+                # direction loss: MSE on drift
+                pred_drift = pred_e - pred_s
+                gt_drift = gt_e - gt_s
+                dir_loss = (pred_drift - gt_drift).pow(2)
+                dir_losses.append(dir_loss)
+
             # confidence obj loss for negative (unmatched preds)
             if pconf is not None:
                 for pj in unmatched_preds:
@@ -313,23 +402,27 @@ class RegressionHeadLoss(nn.Module):
             loc_sum = torch.stack(loc_losses).sum() if len(loc_losses) > 0 else torch.tensor(0.0, device=device)
             class_sum = torch.stack(class_losses).sum() if len(class_losses) > 0 else torch.tensor(0.0, device=device)
             conf_sum = torch.stack(conf_losses).sum() if len(conf_losses) > 0 else torch.tensor(0.0, device=device)
+            dir_sum = torch.stack(dir_losses).sum() if len(dir_losses) > 0 else torch.tensor(0.0, device=device)
             total_loc += loc_sum
             total_class += class_sum
             total_conf += conf_sum
+            total_dir += dir_sum
             total_matched += len(pairs)
 
         if total_matched == 0:
             zero = torch.tensor(0.0, device=device)
-            return zero, {"loc_loss": zero, "class_loss": zero, "conf_loss": zero, "total_loss": zero}
+            return zero, {"loc_loss": zero, "class_loss": zero, "conf_loss": zero, "dir_loss": zero, "total_loss": zero}
 
         loc_loss_avg = total_loc / (total_matched + self.eps)
         class_loss_avg = total_class / (total_matched + self.eps)
         conf_loss_avg = total_conf / (B * N + self.eps)  # average over all predictions
+        dir_loss_avg = total_dir / (total_matched + self.eps)
 
-        total_loss = self.w_loc * loc_loss_avg + self.w_class * class_loss_avg + self.w_conf * conf_loss_avg
+        total_loss = self.w_loc * loc_loss_avg + self.w_class * class_loss_avg + self.w_conf * conf_loss_avg + self.w_dir * dir_loss_avg
 
         loss_dict = {"loc_loss": loc_loss_avg.detach(), "class_loss": class_loss_avg.detach(),
-                     "conf_loss": conf_loss_avg.detach(), "total_loss": total_loss.detach(),
+                     "conf_loss": conf_loss_avg.detach(), "dir_loss": dir_loss_avg.detach(),
+                     "total_loss": total_loss.detach(),
                      "matched_count": total_matched, }
         return total_loss, loss_dict
 

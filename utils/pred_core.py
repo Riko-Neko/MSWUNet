@@ -41,7 +41,7 @@ def _process_batch_core(model, batch, device, mode):
             if len(batch) > 1 and isinstance(batch[1], torch.Tensor):
                 clean = batch[1].to(device)
             if len(batch) > 2 and isinstance(batch[2], torch.Tensor):
-                gt_boxes = batch[2].to(device)
+                gt_boxes = batch[-1].to(device)
         else:  # 'mask' as default
             rfi_mask = None
             gt_boxes = None
@@ -185,8 +185,9 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
                 gt_boxes = results["gt_boxes"][0].cpu().numpy()  # Assuming (N_gt, 2) or similar, [start, stop]
                 gt_starts = gt_boxes[:, 0]
                 gt_stops = gt_boxes[:, 1]
+                gt_classes = gt_boxes[:, 2]
                 N_gt = len(gt_starts)
-                gt_boxes_tuple = (N_gt, gt_starts, gt_stops)
+                gt_boxes_tuple = (N_gt, gt_classes, gt_starts, gt_stops)
 
             # Create figure with subplots
             fig, axs = plt.subplots(3, 1, figsize=(14, 21))

@@ -73,8 +73,8 @@ P = 2
 
 # NMS config
 nms_kargs = dict(
-    iou_thresh=1.,
-    score_thresh=0.)
+    iou_thresh=0.75,
+    score_thresh=0.25)
 if pmode == 'yolo':
     nms_kargs['top_k'] = None
 
@@ -83,14 +83,18 @@ drift = [-4.0, 4.0]
 snr_threshold = 20.0
 
 # Model config
+dim = 64
+levels = [2, 4, 8, 16]
+feat_channels = dim * ([1] + levels)[1]
 dwtnet_args = dict(
     in_chans=1,
-    dim=64,
-    levels=[2, 4, 8, 16],
+    dim=dim,
+    levels=levels,
     wavelet_name='db4',
     extension_mode='periodization',
     N=10,
     num_classes=2,
+    feat_channels=feat_channels,
     dropout=0.05)
 unet_args = dict()
 

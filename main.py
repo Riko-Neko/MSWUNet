@@ -25,15 +25,17 @@ Make sure you do this before committing.
 
 """
 import argparse
+import os
 from pathlib import Path
 
+import pandas as pd
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchinfo import summary
 
 from gen.SETIdataset import DynamicSpectrumDataset
-from model.DetDWTNet import DWTNet
+from model.DetDWTNet import DWTNet, FreqRegressionDetector
 from utils.loss_func import DetectionCombinedLoss, MaskCombinedLoss
 from utils.train_core import train_model
 
@@ -75,21 +77,25 @@ valid_interval = 1
 valid_steps = 50
 log_interval = 50
 force_save_best = True
+freeze_backbone = True
 
 # Optimization config
 # checkpoint_dir = "./checkpoints/unet"
 checkpoint_dir = "./checkpoints/dwtnet"
-det_level_weights = None
 
 # Model config
+dim = 64
+levels = [2, 4, 8, 16]
+feat_channels = dim * ([1] + levels)[1]
 dwtnet_args = dict(
     in_chans=1,
-    dim=64,
-    levels=[2, 4, 8, 16],
+    dim=dim,
+    levels=levels,
     wavelet_name='db4',
     extension_mode='periodization',
     N=10,
     num_classes=2,
+    feat_channels=feat_channels,
     dropout=0.05)
 unet_args = dict()
 
@@ -178,17 +184,109 @@ def main():
     #                                                  min_lr=1e-9)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30, eta_min=1.0e-12)
 
-    # Check for latest checkpoint to resume from
-    checkpoint_files = list(Path(checkpoint_dir).glob("model_epoch_*.pth"))
+    # Create checkpoint directory
+    os.makedirs(checkpoint_dir, exist_ok=True)
 
-    if checkpoint_files:
-        latest_checkpoint = max(checkpoint_files, key=lambda x: int(x.stem.split('_')[-1]))
-        if latest_checkpoint.exists():
-            resume_from = latest_checkpoint
-        else:
-            resume_from = None
+    # Training log files
+    step_log_file = Path(checkpoint_dir) / "training_log.csv"
+    epoch_log_file = Path(checkpoint_dir) / "epoch_log.csv"
+    best_weights_file = Path(checkpoint_dir) / "best_model.pth"
+
+    # Initialize step log
+    if os.path.exists(step_log_file):
+        # Append to existing step log
+        pass
     else:
-        resume_from = None
+        # Create new step log with header
+        with open(step_log_file, 'w') as f:
+            if mode == 'mask':
+                f.write(
+                    "epoch,global_step,total_loss,spectrum_loss,ssim_loss,rfi_loss,detection_loss,alpha,beta,gamma,delta\n")
+            elif mode == 'detection':
+                f.write(
+                    "epoch,global_step,total_loss,detection_loss,denoise_loss,loc_loss,class_loss,conf_loss,n_matched,lambda_denoise\n")
+
+    # Initialize epoch log
+    if os.path.exists(epoch_log_file):
+        # Load existing epoch log
+        epoch_log = pd.read_csv(epoch_log_file).to_dict('records')
+    else:
+        epoch_log = []
+        with open(epoch_log_file, 'w') as f:
+            f.write("epoch,train_loss,valid_loss,epoch_time\n")
+
+    # Determine the best validation loss from epoch log
+    best_valid_loss = float('inf')
+    start_epoch = 0
+    resume_from = None
+
+    # Check for checkpoint to load from
+    if load_best:
+        best_checkpoint = Path(checkpoint_dir) / "best_model.pth"
+        if best_checkpoint.exists():
+            resume_from = best_checkpoint
+            print("[\033[32mInfo\033[0m] Loading best model for resume.")
+        else:
+            print("[\033[33mWarn\033[0m] Best model not found, starting from scratch.")
+    else:
+        checkpoint_files = list(Path(checkpoint_dir).glob("model_epoch_*.pth"))
+        if checkpoint_files:
+            latest_checkpoint = max(checkpoint_files, key=lambda x: int(x.stem.split('_')[-1]))
+            if latest_checkpoint.exists():
+                resume_from = latest_checkpoint
+
+    if resume_from:
+        print(f"[\033[32mInfo\033[0m] Loading model from {resume_from}")
+        checkpoint = torch.load(resume_from, map_location=device, weights_only=False)
+        state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
+        if mode == "detection":
+            try:
+                model.load_state_dict(state_dict, strict=True)
+            except RuntimeError:
+                print(
+                    "[\033[33mWarn\033[0m] Detector state dict mismatch detected. Loading backbone weights and reinitializing detector.")
+                filtered_dict = {k: v for k, v in state_dict.items() if not k.startswith('detector.')}
+                model.load_state_dict(filtered_dict, strict=False)
+                # Reinitialize detector with original args
+                model.detector = FreqRegressionDetector(in_channels=dwtnet_args['in_chans'], N=dwtnet_args['N'],
+                                                        num_classes=dwtnet_args['num_classes'],
+                                                        feat_channels=feat_channels, dropout=dwtnet_args['dropout'])
+        else:
+            model.load_state_dict(state_dict, strict=True)
+
+        start_epoch = checkpoint['epoch'] + 1  # Start from the next epoch
+
+        # Load criterion state for mask mode
+        if mode == 'mask':
+            criterion.step = checkpoint['criterion_step']
+            criterion.mse_moving_avg = checkpoint['mse_moving_avg']
+
+        print(f"[\033[32mInfo\033[0m] Resumed at epoch {start_epoch}")
+        try:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            print("[\033[32mInfo\033[0m] Optimizer state loaded.")
+        except Exception as e:
+            print(f"[\033[33mWarn\033[0m]: failed to load optimizer state: {e}")
+
+    else:
+        print("[\033[32mInfo\033[0m] Starting training from scratch.")
+
+    # Handle force_save_best
+    if resume_from and force_save_best:
+        print("[\033[32mInfo\033[0m] Forcing best model save with reset validation loss.")
+        best_valid_loss = float('inf')  # Reset the best validation loss
+    elif epoch_log:
+        valid_epochs = [log for log in epoch_log if pd.notna(log['valid_loss'])]
+        if valid_epochs:
+            best_log = min(valid_epochs, key=lambda x: x['valid_loss'])
+            best_valid_loss = best_log['valid_loss']
+
+    # Freeze backbone if enabled
+    if freeze_backbone:
+        for name, param in model.named_parameters():
+            if not name.startswith('detector.'):
+                param.requires_grad = False
+        print("[\033[32mInfo\033[0m] Backbone frozen, training only detector head")
 
     # Moving to device
     model = model.to(device)
@@ -198,8 +296,8 @@ def main():
     train_model(model=model, train_dataloader=train_dataloader, valid_dataloader=valid_dataloader, criterion=criterion,
                 optimizer=optimizer, scheduler=scheduler, device=device, mode=mode, num_epochs=num_epochs,
                 steps_per_epoch=steps_per_epoch, valid_interval=valid_interval, valid_steps=valid_steps,
-                checkpoint_dir=checkpoint_dir, log_interval=log_interval, det_level_weights=det_level_weights,
-                resume_from=resume_from, use_best_weights=load_best, force_save_best=force_save_best)
+                checkpoint_dir=checkpoint_dir, log_interval=log_interval, start_epoch=start_epoch,
+                best_valid_loss=best_valid_loss, epoch_log=epoch_log)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from blimpy import Waterfall
 from matplotlib import pyplot as plt
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 
 from gen.SETIgen import sim_dynamic_spec_seti
 from utils.det_utils import plot_F_lines
@@ -71,6 +71,7 @@ class DynamicSpectrumDataset(Dataset):
         self.total_time = self.tchans * self.dt
         self.t_center = torch.tensor((self.tchans - 1) / 2 / (self.tchans - 1))
         self.t_width = torch.tensor((self.tchans - 1) / (self.tchans - 1))
+        self.DEBUG = True
 
     def __len__(self):
         return 10 ** 9  # 虚拟一个很大的长度
@@ -208,6 +209,9 @@ class DynamicSpectrumDataset(Dataset):
         else:
             signal_spec, clean_spec, noisy_spec, rfi_mask, freq_info = sim_dynamic_spec_seti(**args)
 
+        if self.DEBUG:
+            print(f"[\033[36mDebug\033[0m] Ground truth boxes to generate: {freq_info}")
+
         # 归一化处理
         mean = np.mean(signal_spec)
         std = np.std(signal_spec)
@@ -251,10 +255,13 @@ class DynamicSpectrumDataset(Dataset):
                 classes = torch.tensor(classes, dtype=torch.float32)
                 # YOLO format: [class_id, x_center, y_center, width, height]
                 gt_boxes[:N, 0] = torch.clamp(classes, 0.0, 1.0)
-                gt_boxes[:N, 1] = self.t_center
-                gt_boxes[:N, 2] = torch.clamp(f_center, 0.0, 1.0)
-                gt_boxes[:N, 3] = self.t_width
-                gt_boxes[:N, 4] = torch.clamp(f_width, 0.0, 1.0)
+                gt_boxes[:N, 1] = f_center
+                gt_boxes[:N, 2] = self.t_center
+                gt_boxes[:N, 3] = torch.clamp(f_width, 0.0, 1.0)
+                gt_boxes[:N, 4] = torch.clamp(self.t_width, 0.0, 1.0)
+                if self.DEBUG:
+                    print(
+                        f"[\033[36mDebug\033[0m] Generated {N} boxes, format [class_id, x_center, y_center, width, height]:\n{gt_boxes}")
             return noisy_spec, clean_spec, gt_boxes
         elif self.mode == 'detection':
             N, classes, f_starts, f_stops = freq_info if freq_info else (0, [], [])
@@ -353,14 +360,10 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=Fals
         }[kind]
     os.makedirs(out_dir, exist_ok=True)
 
-    loader = DataLoader(dataset, batch_size=1, shuffle=False)
-    iterator = iter(loader)
-
     for i in range(num):
-        try:
-            sample = next(iterator)
-        except StopIteration:
+        if i >= len(dataset):
             break
+        sample = dataset[i]
 
         if isinstance(sample, (list, tuple)):
             noisy_spec, clean_spec, rfi_mask, freq_info, _ = sample
@@ -368,14 +371,14 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=Fals
             raise TypeError("Dataset must return a tuple (noisy, clean, mask, freq_info)")
 
         if kind == 'clean':
-            spec = clean_spec.squeeze().numpy()
+            spec = clean_spec.squeeze()
         elif kind == 'noisy':
-            spec = noisy_spec.squeeze().numpy()
+            spec = noisy_spec.squeeze()
         elif kind == 'mask':
             if with_spectrum:
                 print("[\033[33mWarn\033[0m] Cannot plot frequency spectrum with mask, ignoring.")
                 with_spectrum = False
-            spec = rfi_mask.squeeze().float().numpy()
+            spec = rfi_mask.squeeze().float()
 
         # 计算频率轴
         fch1 = dataset.fch1
@@ -480,6 +483,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    plot_samples(dataset, kind='clean', num=30, with_spectrum=False, spectrum_type='fft2d')
+    plot_samples(dataset, kind='clean', num=100, with_spectrum=True, spectrum_type='mean')
     # plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
     # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)

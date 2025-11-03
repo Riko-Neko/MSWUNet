@@ -89,7 +89,6 @@ def validate(model, loss_fn, dataloader, device, val_steps=20):
 
 
 # ----- inference function aligned to decode_predictions output -----
-# ----- inference function aligned to decode_predictions output -----
 def inference_and_plot(model, dataloader, device, save_dir, steps=10, conf_thresh=0.25, iou_threshold=0.5):
     """
     Run inference and plot.

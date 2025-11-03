@@ -153,18 +153,25 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'],
         return
 
     def to_numpy(x):
-        if isinstance(x, list):
-            if len(x) > 0 and isinstance(x[0], torch.Tensor):
-                x = torch.cat([t.flatten() for t in x])
-            else:
-                x = np.array(x)
         if isinstance(x, torch.Tensor):
-            return x.cpu().numpy()
+            x = x.detach().cpu().numpy()
+        elif isinstance(x, list):
+            x = np.array(x)
         return np.asarray(x)
 
-    classes = to_numpy(classes).astype(int)
-    f_starts = to_numpy(f_starts)
-    f_stops = to_numpy(f_stops)
+    f_starts, f_stops, classes = map(to_numpy, (f_starts, f_stops, classes))
+
+    valid_mask = (np.isfinite(f_starts) & np.isfinite(f_stops))
+    if normalized:
+        valid_mask &= (f_starts >= 0) & (f_starts <= 1) & (f_stops >= 0) & (f_stops <= 1)
+    else:
+        valid_mask &= (f_starts >= 0) & (f_starts < len(freqs)) & (f_stops >= 0) & (f_stops < len(freqs))
+
+    classes, f_starts, f_stops = classes[valid_mask], f_starts[valid_mask], f_stops[valid_mask]
+    classes = classes.astype(int)
+    if len(classes) == 0:
+        print(f"[\033[33mWarn\033[0m] No valid frequency lines in generated boxes.")
+        return
 
     if np.any(classes < 0):
         raise ValueError(f"[\033[31mError\033[0m] Class IDs must be >= 0. Got: {classes}")
@@ -178,20 +185,6 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'],
             f"Class IDs present: {np.unique(classes).tolist()}"
         )
     colors = list(color)
-
-    valid_mask = (np.isfinite(f_starts) & np.isfinite(f_stops))
-    if normalized:
-        valid_mask &= (f_starts >= 0) & (f_starts <= 1) & (f_stops >= 0) & (f_stops <= 1)
-    else:
-        valid_mask &= (f_starts >= 0) & (f_starts < len(freqs)) & (f_stops >= 0) & (f_stops < len(freqs))
-
-    f_starts = f_starts[valid_mask]
-    f_stops = f_stops[valid_mask]
-    classes = classes[valid_mask]
-
-    if len(f_starts) == 0:
-        print(f"[\033[33mWarn\033[0m] No valid frequency lines in generated boxes.")
-        return
 
     if normalized:
         scale = len(freqs) - 1
