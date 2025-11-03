@@ -436,149 +436,6 @@ Design goals (implemented):
 """
 
 
-class PositionalEncoding1D(nn.Module):
-    def __init__(self, d_model: int, max_len: int = 8192):
-        super().__init__()
-        position = torch.arange(max_len).unsqueeze(1).float()
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
-        pe = torch.zeros(max_len, 1, d_model)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
-
-    def forward(self, length: int, device):
-        return self.pe[:length].to(device)
-
-
-class _FreqRegressionDetector(nn.Module):
-    """
-    Input: x (B, in_channels, T, F)
-    Output: dict with keys:
-        - 'f_start': Tensor (B, N)  (values in [0,1] after sigmoid if use_sigmoid=True in decode)
-        - 'f_end'  : Tensor (B, N)
-        - 'class_logits': Tensor (B, N, num_classes)
-        - 'confidence'  : Tensor (B, N)  (logits; apply sigmoid to get [0,1])
-    Args:
-        - in_channels: number of input channels
-        - N: Fixed number of output items (f_start, f_end, class_logits, confidence)
-        - num_classes: number of classes for classification
-        - feat_channels: number of channels in feature maps
-        - hidden_dim: number of hidden units in FC layers
-        - backbone_downsample: number of downsampling layers in backbone
-        - dropout: dropout rate in FC layers
-    Usage:
-        model = FreqRegressionDetector(in_channels=1, N=8, num_classes=2)
-        out = model(x)  # out is a dict
-    """
-
-    def __init__(self, in_channels: int = 1, N: int = 10, num_classes: int = 2, feat_channels: int = 64,
-                 hidden_dim: int = 256, backbone_downsample: int = 4, dropout: float = 0.0, ):
-        super().__init__()
-        self.N = N
-        self.num_classes = num_classes
-        self.hidden_dim = hidden_dim
-
-        convs = []
-        ch = in_channels
-        for i in range(backbone_downsample):
-            out_ch = feat_channels if i == 0 else feat_channels * (1 + i // 2)
-            # Downsample more on T (dim=2), less on F (dim=3) to preserve frequency resolution
-            stride = (2, 1 if i >= backbone_downsample // 2 else 2)  # Reduce F downsampling in later layers
-            convs.append(nn.Conv2d(ch, out_ch, kernel_size=3, stride=stride, padding=1, bias=False))
-            convs.append(nn.BatchNorm2d(out_ch))
-            convs.append(nn.ReLU(inplace=True))
-            ch = out_ch
-
-        # Additional conv to increase receptive field
-        convs.append(nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1, bias=False))
-        convs.append(nn.BatchNorm2d(ch))
-        convs.append(nn.ReLU(inplace=True))
-        self.conv_backbone = nn.Sequential(*convs)
-
-        self.feat_dim = ch  # channels after backbone
-
-        # Positional encoding for frequency axis
-        self.pos_embed = PositionalEncoding1D(ch, )
-
-        # Transformer encoder to process frequency features
-        encoder_layer = nn.TransformerEncoderLayer(d_model=ch, nhead=8, dim_feedforward=hidden_dim, dropout=dropout,
-                                                   activation='relu')
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
-
-        # Fuse features from both branches
-        self.fc_fuse = nn.Linear(2 * ch, ch)
-
-        # Learnable query embeddings for N boxes
-        self.query_embed = nn.Parameter(torch.randn(N, ch))
-
-        # MLPs for each output head
-        self.fc_start = nn.Linear(ch, 1)
-        self.fc_end = nn.Linear(ch, 1)
-        self.fc_class = nn.Linear(ch, num_classes)
-        self.fc_conf = nn.Linear(ch, 1)
-
-        self._init_weights()
-
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            elif isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0.0)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1.0)
-                nn.init.constant_(m.bias, 0.0)
-            elif isinstance(m, nn.TransformerEncoderLayer):
-                for p in m.parameters():
-                    if p.dim() > 1:
-                        nn.init.xavier_uniform_(p)
-
-        nn.init.normal_(self.query_embed, mean=0.0, std=0.02)
-
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        B = x.size(0)
-        feat = self.conv_backbone(x)  # (B, ch, T', F')
-
-        # 分支1: 平均T (全局频率语义)
-        feat_f = feat.mean(dim=2)  # (B, ch, F')
-        feat_f = feat_f.permute(2, 0, 1)  # (F', B, ch)
-        pos_f = self.pos_embed(feat_f.shape[0], feat_f.device).expand(-1, B, -1)  # (F', B, ch)
-        feat_f = feat_f + pos_f
-        feat_f = self.transformer_encoder(feat_f)  # (F', B, ch)  # 频率分支输出
-
-        # 分支2: 平均F (捕捉drift/重叠)
-        feat_t = feat.permute(2, 0, 3, 1)  # (T', B, F', ch) → 将T作为序列
-        feat_t = feat_t.mean(dim=2)  # (T', B, ch)
-        pos_t = self.pos_embed(feat_t.shape[0], feat_t.device).expand(-1, B, -1)  # (T', B, ch)
-        feat_t = feat_t + pos_t
-        feat_t = self.transformer_encoder(feat_t)  # (T', B, ch)  # 时间分支输出
-
-        # 融合分支: 平均或concat后线性投影
-        feat_t_avg = feat_t.mean(dim=0)  # (B, ch) 平均T'得到全局时间特征
-        feat_f_avg = feat_f.mean(dim=0)  # (B, ch) 平均F'得到全局频率特征
-        fused_feat = torch.cat([feat_f_avg, feat_t_avg], dim=-1)  # (B, 2*ch)
-        fused_feat = self.fc_fuse(fused_feat)  # 投影回ch
-
-        # 查询嵌入基于融合特征
-        queries = self.query_embed.unsqueeze(1).expand(-1, B, -1)  # (N, B, ch)
-
-        # 注意: 用融合特征计算attn (或分别attn后融合)
-        attn = torch.einsum("nbc, bc -> nb", queries, fused_feat) / (self.feat_dim ** 0.5)  # 简化attn到全局
-        attn = F.softmax(attn.unsqueeze(-1), dim=-1)  # (N, B, 1)
-
-        box_feats = queries * attn.expand(-1, -1, self.feat_dim)  # (N, B, ch) 加权
-        box_feats = box_feats.permute(1, 0, 2)  # (B, N, ch)
-
-        f_start = self.fc_start(box_feats).squeeze(-1)  # (B, N)
-        f_end = self.fc_end(box_feats).squeeze(-1)  # (B, N)
-        class_logits = self.fc_class(box_feats)  # (B, N, num_classes)
-        confidence = self.fc_conf(box_feats).squeeze(-1)  # (B, N)
-
-        return {"f_start": f_start, "f_end": f_end, "class_logits": class_logits, "confidence": confidence}
-
-
 class FreqRegressionDetector(nn.Module):
     """
     Input: x (B, in_channels, T, F)
@@ -588,6 +445,7 @@ class FreqRegressionDetector(nn.Module):
         - 'class_logits': Tensor (B, N, num_classes)
         - 'confidence'  : Tensor (B, N)  (logits)
     Args:
+        - fchans: number of frequency bins
         - in_channels: number of input channels
         - N: Fixed number of output items
         - num_classes: number of classes
@@ -600,17 +458,19 @@ class FreqRegressionDetector(nn.Module):
         out = model(x)  # out is a dict
     """
 
-    def __init__(self, in_channels: int = 1, N: int = 8, num_classes: int = 2, feat_channels: int = 64,
-                 hidden_dim: int = 256, backbone_downsample: int = 4, dropout: float = 0.0):
+    def __init__(self, fchans: int = 1024, in_channels: int = 1, N: int = 10, num_classes: int = 2,
+                 feat_channels: int = 64, backbone_downsample: int = 4, dropout: float = 0.0):
         super().__init__()
         self.N = N
         self.num_classes = num_classes
+        self.fchans = fchans
+        self.backbone_downsample = backbone_downsample
 
         convs = []
         ch = in_channels
         for i in range(backbone_downsample):
-            out_ch = feat_channels * (2 ** i)  # Progressive increase: 64, 128, 256, etc.
-            stride = (2, 2) if i < 2 else (2, 1)  # More downsample on T, preserve F
+            out_ch = feat_channels * (2 ** i)
+            stride = (2, 2) if i < 2 else (2, 1)
             convs.append(nn.Conv2d(ch, out_ch, kernel_size=3, stride=stride, padding=1, bias=False))
             convs.append(nn.BatchNorm2d(out_ch))
             convs.append(nn.ReLU(inplace=True))
@@ -618,26 +478,34 @@ class FreqRegressionDetector(nn.Module):
                 convs.append(nn.Dropout2d(p=dropout))
             ch = out_ch
 
-        # Additional conv for receptive field
         convs.append(nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1, bias=False))
         convs.append(nn.BatchNorm2d(ch))
         convs.append(nn.ReLU(inplace=True))
         self.conv_backbone = nn.Sequential(*convs)
 
-        # Global average pooling to flatten
-        self.global_pool = nn.AdaptiveAvgPool2d(1)  # (B, ch, 1, 1)
+        self.freq_dim = self._get_F_dim(self.fchans, self.backbone_downsample)  # compute F'
+        self.time_freq_pool = nn.AdaptiveAvgPool2d((4, self.freq_dim))  # T' -> 4
 
-        # Linear regression head: directly regress from flattened features
-        feat_dim = ch  # Final channels
-        out_dim = N * (2 + num_classes + 1)  # f_start, f_end, class_logits (num_classes), confidence
+        feat_ch = ch
+        feat_dim = feat_ch * 4 * self.freq_dim
+
+        out_dim = N * (2 + num_classes + 1)  # f_start, f_end, class_logits, confidence
         self.linear_head = nn.Linear(feat_dim, out_dim)
 
         self._init_weights()
+
+    def _get_F_dim(self, fchans: int, backbone_downsample: int) -> int:
+        f = fchans
+        for i in range(backbone_downsample):
+            f = (f + 1) // 2 if i < 2 else f
+        return int(f)
 
     def _init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                if getattr(m, "bias", None) is not None:
+                    nn.init.constant_(m.bias, 0.0)
             elif isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
@@ -649,14 +517,16 @@ class FreqRegressionDetector(nn.Module):
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
         Return raw logits for f_start, f_end, class_logits, and confidence.
+        Input: x (B, in_channels, T, F)
         """
         B = x.size(0)
         feat = self.conv_backbone(x)  # (B, ch, T', F')
-        pooled = self.global_pool(feat).view(B, -1)  # (B, feat_dim)
+        pooled = self.time_freq_pool(feat)  # (B, ch, 4, freq_dim)
+        pooled = pooled.view(B, -1)  # (B, ch * 4 * freq_dim)
         out = self.linear_head(pooled)  # (B, N * (2 + num_classes + 1))
         out = out.view(B, self.N, -1)  # (B, N, 2 + num_classes + 1)
 
-        # Split outputs
+        # split outputs
         f_start = out[..., 0]  # (B, N)
         f_end = out[..., 1]  # (B, N)
         class_logits = out[..., 2:2 + self.num_classes]  # (B, N, num_classes)
@@ -672,7 +542,7 @@ Main model for DWTNet.
 
 class DWTNet(nn.Module):
     def __init__(self, in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4', extension_mode='reflect',
-                 N=10, num_classes=2, feat_channels=64, dropout=0.0):
+                 fchans=1024, N=10, num_classes=2, feat_channels=64, dropout=0.0):
         super(DWTNet, self).__init__()
         self.level = 1  # Do not change DWT internal level!
         filters = [dim, dim * levels[0], dim * levels[1], dim * levels[2], dim * levels[3]]
@@ -715,7 +585,7 @@ class DWTNet(nn.Module):
         self.deno_out = nn.Conv2d(filters[0], in_chans, kernel_size=1)
 
         # Regressions 分支
-        self.detector = FreqRegressionDetector(in_channels=in_chans, N=N, num_classes=num_classes,
+        self.detector = FreqRegressionDetector(fchans=fchans, in_channels=in_chans, N=N, num_classes=num_classes,
                                                feat_channels=feat_channels, dropout=dropout)
 
     def forward(self, x):

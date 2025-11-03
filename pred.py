@@ -92,6 +92,7 @@ dwtnet_args = dict(
     levels=levels,
     wavelet_name='db4',
     extension_mode='periodization',
+    fchans=fchans,
     N=10,
     num_classes=2,
     feat_channels=feat_channels,

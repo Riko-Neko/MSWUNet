@@ -210,7 +210,8 @@ class DynamicSpectrumDataset(Dataset):
             signal_spec, clean_spec, noisy_spec, rfi_mask, freq_info = sim_dynamic_spec_seti(**args)
 
         if self.DEBUG:
-            print(f"[\033[36mDebug\033[0m] Ground truth boxes to generate: {freq_info}")
+            print(f"[\033[36mDebug\033[0m] Ground truth boxes to generate: {freq_info}, "
+                  f"normalized ({np.array(freq_info[2]) / self.fchans}, {np.array(freq_info[3]) / self.fchans})")
 
         # 归一化处理
         mean = np.mean(signal_spec)

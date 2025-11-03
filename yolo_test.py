@@ -186,7 +186,7 @@ def main(argv=None):
     val_loader = DataLoader(valid_dataset, batch_size=batch_size, pin_memory=True)
 
     # model + loss
-    model = TinyYOLO(num_classes=2, S=128, B=3).to(device)
+    model = TinyYOLO(num_classes=2, S=31, B=3,base_channels=64).to(device)
     summary(model, input_size=(1, 1, tchans, fchans))
 
     loss_fn = YOLOv1Loss(S=model.S, B=model.B, C=model.C, lambda_coord=5.0, lambda_noobj=0.05).to(device)
