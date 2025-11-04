@@ -71,7 +71,7 @@ class DynamicSpectrumDataset(Dataset):
         self.total_time = self.tchans * self.dt
         self.t_center = torch.tensor((self.tchans - 1) / 2 / (self.tchans - 1))
         self.t_width = torch.tensor((self.tchans - 1) / (self.tchans - 1))
-        self.DEBUG = True
+        self.DEBUG = False
 
     def __len__(self):
         return 10 ** 9  # 虚拟一个很大的长度

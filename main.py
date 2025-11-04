@@ -38,6 +38,7 @@ from gen.SETIdataset import DynamicSpectrumDataset
 from model.DetDWTNet import DWTNet, FreqRegressionDetector
 from utils.loss_func import DetectionCombinedLoss, MaskCombinedLoss
 from utils.train_core import train_model
+from utils.train_utils import safe_load_state_dict, load_optimizer_selectively
 
 # modes
 # mode = 'yolo'
@@ -78,6 +79,8 @@ valid_steps = 50
 log_interval = 50
 force_save_best = True
 freeze_backbone = True
+force_reconstruct = False
+mismatch_load = True
 
 # Optimization config
 # checkpoint_dir = "./checkpoints/unet"
@@ -86,7 +89,7 @@ checkpoint_dir = "./checkpoints/dwtnet"
 # Model config
 dim = 64
 levels = [2, 4, 8, 16]
-feat_channels = dim * ([1] + levels)[1]
+feat_channels = dim * ([1] + levels)[0]
 dwtnet_args = dict(
     in_chans=1,
     dim=dim,
@@ -94,7 +97,7 @@ dwtnet_args = dict(
     wavelet_name='db4',
     extension_mode='periodization',
     fchans=fchans,
-    N=10,
+    N=5,
     num_classes=2,
     feat_channels=feat_channels,
     dropout=0.005)
@@ -106,7 +109,7 @@ regress_loss_args = dict(
     lambda_learnable=False,
     regression_loss_kwargs=dict(
         num_classes=2,
-        N=10,
+        N=5,
         w_loc=1.0,
         w_class=1.0,
         w_conf=1.0,
@@ -177,13 +180,7 @@ def main():
         # model = UNet(**unet_args)
         criterion = MaskCombinedLoss(device, **mask_loss_args)
 
-    summary(model, input_size=(1, 1, 116, 1024))
-
-    optimizer = optim.Adam(list(model.parameters()) + list(criterion.parameters()), lr=5e-4, weight_decay=1e-7)
-
-    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True,
-    #                                                  min_lr=1e-9)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30, eta_min=1.0e-12)
+    summary(model, input_size=(1, 1, tchans, fchans))
 
     # Create checkpoint directory
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -220,12 +217,13 @@ def main():
     best_valid_loss = float('inf')
     start_epoch = 0
     resume_from = None
+    checkpoint = None
+    mismatched = False
 
     # Check for checkpoint to load from
     if load_best:
-        best_checkpoint = Path(checkpoint_dir) / "best_model.pth"
-        if best_checkpoint.exists():
-            resume_from = best_checkpoint
+        if best_weights_file.exists():
+            resume_from = best_weights_file
             print("[\033[32mInfo\033[0m] Loading best model for resume.")
         else:
             print("[\033[33mWarn\033[0m] Best model not found, starting from scratch.")
@@ -242,18 +240,28 @@ def main():
         state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
         if mode == "detection":
             try:
-                model.load_state_dict(state_dict, strict=True)
+                model.load_state_dict(state_dict, strict=not mismatch_load)
             except RuntimeError:
-                print(
-                    "[\033[33mWarn\033[0m] Detector state dict mismatch detected. Loading backbone weights and reinitializing detector.")
-                filtered_dict = {k: v for k, v in state_dict.items() if not k.startswith('detector.')}
-                model.load_state_dict(filtered_dict, strict=False)
-                # Reinitialize detector with original args
-                model.detector = FreqRegressionDetector(in_channels=dwtnet_args['in_chans'], N=dwtnet_args['N'],
-                                                        num_classes=dwtnet_args['num_classes'],
-                                                        feat_channels=feat_channels, dropout=dwtnet_args['dropout'])
+                if force_reconstruct:
+                    print(
+                        "[\033[33mWarn\033[0m] Detector state dict mismatch detected. Loading backbone weights and reinitializing detector.")
+                    filtered_dict = {k: v for k, v in state_dict.items() if not k.startswith('detector.')}
+                    model.load_state_dict(filtered_dict, strict=False)
+                    model.detector = FreqRegressionDetector(fchans=fchans, in_channels=dwtnet_args['in_chans'],
+                                                            N=dwtnet_args['N'], num_classes=dwtnet_args['num_classes'],
+                                                            feat_channels=feat_channels, dropout=dwtnet_args['dropout'])
+                else:
+                    mismatched = safe_load_state_dict(model, state_dict) if mismatch_load else model.load_state_dict(
+                        state_dict, strict=True)
+
         else:
-            model.load_state_dict(state_dict, strict=True)
+            try:
+                model.load_state_dict(state_dict, strict=not mismatch_load)
+            except RuntimeError:
+                if mismatch_load:
+                    mismatched = safe_load_state_dict(model, state_dict)
+                else:
+                    raise
 
         start_epoch = checkpoint['epoch'] + 1  # Start from the next epoch
 
@@ -263,14 +271,24 @@ def main():
             criterion.mse_moving_avg = checkpoint['mse_moving_avg']
 
         print(f"[\033[32mInfo\033[0m] Resumed at epoch {start_epoch}")
-        try:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            print("[\033[32mInfo\033[0m] Optimizer state loaded.")
-        except Exception as e:
-            print(f"[\033[33mWarn\033[0m]: failed to load optimizer state: {e}")
 
     else:
         print("[\033[32mInfo\033[0m] Starting training from scratch.")
+
+    # initialize optimizer and scheduler
+    optimizer = optim.Adam(list(model.parameters()) + list(criterion.parameters()), lr=5e-3, weight_decay=1e-7)
+    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True,
+    #                                                  min_lr=1e-9)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30, eta_min=1.0e-12)
+
+    if resume_from:
+        if 'optimizer_state_dict' not in checkpoint:
+            print("[\033[33mWarn\033[0m] No optimizer state in checkpoint, using fresh optimizer.")
+        elif mismatched:
+            load_optimizer_selectively(optimizer, checkpoint['optimizer_state_dict'])
+        else:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            print("[\033[32mInfo\033[0m] Optimizer state loaded.")
 
     # Handle force_save_best
     if resume_from and force_save_best:

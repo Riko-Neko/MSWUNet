@@ -1,3 +1,4 @@
+from math import sqrt
 from typing import Dict
 
 import pytorch_wavelets.dwt.lowlevel as lowlevel
@@ -436,6 +437,42 @@ Design goals (implemented):
 """
 
 
+class CoordAtt(nn.Module):
+    """
+    Coordinate Attention
+    Reference idea: encode H and W positional information separately and generate channel attention.
+    Implementation follows the common open-source variant.
+    Input: (B, C, H, W)
+    Output: (B, C, H, W)
+    """
+
+    def __init__(self, inp, oup, reduction=32):
+        super().__init__()
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))  # keep T, collapse F
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))  # keep F, collapse T
+        mip = max(8, inp // reduction)
+
+        self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn1 = nn.BatchNorm2d(mip)
+        self.act = nn.ReLU(inplace=True)
+        self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0, bias=False)
+        self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0, bias=False)
+
+    def forward(self, x):
+        B, C, H, W = x.size()
+        x_h = self.pool_h(x)  # (B, C, T, 1)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)  # (B, C, 1, F) -> (B, C, F, 1)
+        y = torch.cat([x_h, x_w], dim=2)  # (B, C, H + F, 1)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act(y)
+
+        x_h_att = self.conv_h(y[:, :, :H, :])  # (B, C, T, 1)
+        x_w_att = self.conv_w(y[:, :, H:, :]).permute(0, 1, 3, 2)  # (B, C, F, 1) -> (B, C, 1, F)
+        attn = torch.sigmoid(x_h_att + x_w_att)  # broadcasting to (B,C,H,W)
+        return x * attn
+
+
 class FreqRegressionDetector(nn.Module):
     """
     Input: x (B, in_channels, T, F)
@@ -458,25 +495,32 @@ class FreqRegressionDetector(nn.Module):
         out = model(x)  # out is a dict
     """
 
-    def __init__(self, fchans: int = 1024, in_channels: int = 1, N: int = 10, num_classes: int = 2,
+    def __init__(self, fchans: int = 1024, in_channels: int = 1, N: int = 5, num_classes: int = 2,
                  feat_channels: int = 64, backbone_downsample: int = 4, dropout: float = 0.0):
         super().__init__()
         self.N = N
         self.num_classes = num_classes
         self.fchans = fchans
         self.backbone_downsample = backbone_downsample
+        self.bottleneck = feat_channels
+        backbone_coord_atts = True
+        coord_att_reduction = 32
+        strides = [(2, 2), (3, 2), (2, 2), (3, 2)]
+        neck_dim_T = 2
 
         convs = []
         ch = in_channels
         for i in range(backbone_downsample):
             out_ch = feat_channels * (2 ** i)
-            stride = (2, 2) if i < 2 else (2, 1)
+            stride = strides[i]
             convs.append(nn.Conv2d(ch, out_ch, kernel_size=3, stride=stride, padding=1, bias=False))
             convs.append(nn.BatchNorm2d(out_ch))
             convs.append(nn.ReLU(inplace=True))
             if dropout > 0:
                 convs.append(nn.Dropout2d(p=dropout))
             ch = out_ch
+            if backbone_coord_atts:
+                convs.append(CoordAtt(out_ch, out_ch, reduction=coord_att_reduction))
 
         convs.append(nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1, bias=False))
         convs.append(nn.BatchNorm2d(ch))
@@ -484,20 +528,25 @@ class FreqRegressionDetector(nn.Module):
         self.conv_backbone = nn.Sequential(*convs)
 
         self.freq_dim = self._get_F_dim(self.fchans, self.backbone_downsample)  # compute F'
-        self.time_freq_pool = nn.AdaptiveAvgPool2d((4, self.freq_dim))  # T' -> 4
+        self.time_freq_pool = nn.AdaptiveAvgPool2d((neck_dim_T, self.freq_dim))  # T' -> 2
 
-        feat_ch = ch
-        feat_dim = feat_ch * 4 * self.freq_dim
+        self.bottleneck_conv = nn.Conv2d(ch, self.bottleneck, kernel_size=1, bias=False)
+        self.bottleneck_bn = nn.BatchNorm2d(self.bottleneck)
+        self.bottleneck_relu = nn.ReLU(inplace=True)
+        self.coord_att_bottleneck = CoordAtt(self.bottleneck, self.bottleneck, reduction=coord_att_reduction)
 
+        neck_dim = self.bottleneck * neck_dim_T * self.freq_dim
         out_dim = N * (2 + num_classes + 1)  # f_start, f_end, class_logits, confidence
-        self.linear_head = nn.Linear(feat_dim, out_dim)
+        # hidden_dim = 1 << (int(sqrt(neck_dim * out_dim)).bit_length() - 1)  # hidden_dim ≈ sqrt(in_dim × out_dim)
+        hidden_dim = 1 << (int(sqrt(neck_dim * out_dim)) - 1).bit_length()
+        self.linear_head = nn.Sequential(nn.Linear(neck_dim, hidden_dim), nn.Linear(hidden_dim, out_dim))
 
         self._init_weights()
 
     def _get_F_dim(self, fchans: int, backbone_downsample: int) -> int:
         f = fchans
         for i in range(backbone_downsample):
-            f = (f + 1) // 2 if i < 2 else f
+            f = (f + 1) // 2
         return int(f)
 
     def _init_weights(self):
@@ -521,8 +570,10 @@ class FreqRegressionDetector(nn.Module):
         """
         B = x.size(0)
         feat = self.conv_backbone(x)  # (B, ch, T', F')
-        pooled = self.time_freq_pool(feat)  # (B, ch, 4, freq_dim)
-        pooled = pooled.view(B, -1)  # (B, ch * 4 * freq_dim)
+        pooled = self.time_freq_pool(feat)  # (B, ch, 2, freq_dim)
+        feat = self.bottleneck_relu(self.bottleneck_bn(self.bottleneck_conv(pooled)))  # (B, bottleneck, 2, freq_dim)
+        feat = self.coord_att_bottleneck(feat)  # (B, bottleneck, 2, freq_dim)
+        pooled = feat.view(B, -1)  # (B, bottleneck * 2 * freq_dim)
         out = self.linear_head(pooled)  # (B, N * (2 + num_classes + 1))
         out = out.view(B, self.N, -1)  # (B, N, 2 + num_classes + 1)
 
@@ -542,7 +593,7 @@ Main model for DWTNet.
 
 class DWTNet(nn.Module):
     def __init__(self, in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4', extension_mode='reflect',
-                 fchans=1024, N=10, num_classes=2, feat_channels=64, dropout=0.0):
+                 fchans=1024, N=5, num_classes=2, feat_channels=64, dropout=0.0):
         super(DWTNet, self).__init__()
         self.level = 1  # Do not change DWT internal level!
         filters = [dim, dim * levels[0], dim * levels[1], dim * levels[2], dim * levels[3]]
@@ -664,7 +715,8 @@ if __name__ == '__main__':
 
     if test_mode == 'model':
         print(f"[\033[32mInfo\033[0m] Testing for DWTNet:")
-        model = DWTNet(in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4')
+        model = DWTNet(in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4', extension_mode='reflect',
+                       fchans=1024, N=5, num_classes=2, feat_channels=64, dropout=0.0)
         print(model)
 
         # (batch_size, channels, time channels, freq channels)
@@ -705,7 +757,7 @@ if __name__ == '__main__':
         denoised, detections = model(test_input)
         print(f"Input shape: {test_input.shape}")
         print(f"Denoised shape: {denoised.shape}")
-        print(f"Detections shape: {[p.shape for p in detections]}")
+        print(f"Detections: {detections}")
         print(f"[\033[32mInfo\033[0m] Generating summary for DWTNet:")
         summary(model, input_size=(1, 1, 116, 1024))
 
@@ -715,7 +767,7 @@ if __name__ == '__main__':
         T = 128
         F = 256
         x = torch.randn(B, 1, T, F)
-        model = FreqRegressionDetector(in_channels=1, N=6, num_classes=2)
+        model = FreqRegressionDetector(in_channels=1, N=5, num_classes=2)
         out = model(x)
         dec = model.decode(out, apply_sigmoid=True, apply_softmax_class=False)
         print("f_start shape:", dec["f_start"].shape)  # (B, N)
