@@ -469,7 +469,7 @@ if __name__ == "__main__":
                                      snr_min=15.0, snr_max=25.0, width_min=10, width_max=30, num_signals=(1, 2),
                                      noise_std_min=0.025, noise_std_max=0.05, noise_mean_min=2, noise_mean_max=3,
                                      noise_type='chi2', use_fil=True,
-                                     background_fil="../data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil")
+                                     background_fil="../data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil")
 
     """
     参数生成 Refs:

@@ -1,4 +1,5 @@
 import platform
+from pathlib import Path
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -37,8 +38,8 @@ class SETIWaterFullDataset(Dataset):
             ignore_polarization (bool):
                 If True, combines polarization data according to stokes_mode (default: "I").
             stokes_mode (str):
-                "I" → total intensity (XX + YY)
-                "Q" → linear polarization difference (XX − YY)
+                "I" → total intensity (xx + yy)
+                "Q" → linear polarization difference (xx − yy)
                 (reserved for "U", "V" in future)
         """
         self.device = device
@@ -49,8 +50,11 @@ class SETIWaterFullDataset(Dataset):
             assert isinstance(file_path, (list, tuple)) and len(file_path) >= 2, \
                 "When ignore_polarization=True, file_path must be a list of .fil files (e.g., ['xx_pol0.fil', 'xx_pol1.fil'])."
             # Ensure filenames differ only by polarization suffix
-            base_names = [f.replace("_pol0", "").replace("_pol1", "").replace("_pol2", "").replace("_pol3", "")
-                          for f in file_path]
+            base_names = [Path(f).stem
+                          .replace("_pol0", "")
+                          .replace("_pol1", "")
+                          .replace("_pol2", "")
+                          .replace("_pol3", "") for f in file_path]
             assert len(set(base_names)) == 1, \
                 "All polarization files must have identical names except for the 'pol' part."
             self.obs_list = [Waterfall(fp, load_data=True) for fp in file_path]
@@ -145,6 +149,7 @@ class SETIWaterFullDataset(Dataset):
             f_min, f_max = self.freqs[end_f - 1], self.freqs[start_f]
 
         return patch_tensor, (f_min, f_max), (start_t, end_t)
+
 
 def plot_dataset_item(dataset, index=0, cmap='viridis', log_scale=False):
     """

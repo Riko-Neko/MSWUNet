@@ -66,7 +66,7 @@ noise_mean_min = 2
 noise_mean_max = 3
 nosie_type = "chi2"
 use_fil = True
-fil_folder = Path('./data/33exoplanets/bk')
+fil_folder = Path('./data/33exoplanets/bg')
 background_fil = list(fil_folder.rglob("*.fil"))
 
 # Training config
@@ -110,9 +110,9 @@ regress_loss_args = dict(
     regression_loss_kwargs=dict(
         num_classes=2,
         N=5,
-        w_loc=1.0,
-        w_class=1.0,
-        w_conf=1.0,
+        w_loc=1.5,
+        w_class=0.1,
+        w_conf=0.5,
         eps=1e-8)
 )
 

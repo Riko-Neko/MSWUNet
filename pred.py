@@ -43,21 +43,23 @@ noise_mean_min = 2
 noise_mean_max = 3
 nosie_type = "chi2"
 use_fil = True
-background_fil = ['./data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil',
-                  './data/33exoplanets/HD-180617_M04_pol1_f1400.00-1410.00.fil']
+fil_folder = Path('./data/33exoplanets')
+background_fil = list(fil_folder.rglob("*.fil"))
 
 # Polarization config
 ignore_polarization = False
 stokes_mode = "I"
-XX_dir = "./data/XX/"
-YY_dir = "./data/YY/"
+# XX_dir = "/data/Raid0/obs_data/33exoplanets/xx/"
+# YY_dir = "/data/Raid0/obs_data/33exoplanets/yy/"
+XX_dir = "./data/33exoplanets/xx/"
+YY_dir = "./data/33exoplanets/yy/"
 
 # Observation data
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil"
-obs_file_path = "./data/33exoplanets/Kepler-438_M01_pol2_f1120.00-1150.00.fil"
-# obs_file_path = "./data/33exoplanets/HD-180617_M04_pol1_f1400.00-1410.00.fil"
+# obs_file_path = "data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil"
+obs_file_path = "./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil"
 # obs_file_path = './data/33exoplanets/'
 obs_file_path = [XX_dir, YY_dir] if ignore_polarization else obs_file_path
 
@@ -119,6 +121,31 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
         except Exception:
             return False
 
+    def match_polarization_files(files):
+        from collections import defaultdict
+        groups = defaultdict(list)
+        unmatched = []
+        for file_path in files:
+            # Extract base by removing _pol* part
+            stem = file_path.stem
+            if '_pol' in stem:
+                base = stem.split('_pol')[0]
+                groups[base].append(str(file_path))
+            else:
+                unmatched.append(str(file_path))
+        matched_groups = [group for group in groups.values() if len(group) > 1]
+        for base, group in groups.items():
+            if len(group) == 1:
+                unmatched.extend(group)
+        return matched_groups, unmatched
+
+    def load_model(model_class, checkpoint_path, **kwargs):
+        model = model_class(**kwargs).to(device)
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        model.eval()
+        return model
+
     if device is not None:
         try:
             device = torch.device(device)
@@ -141,17 +168,28 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
 
     # Create datasets based on mode and obs flag
     if obs and mode != "pipeline":
-        if isinstance(obs_file_path, list):
-            raise TypeError("In non-pipeline mode, observation data path should be a file, not a list.")
+        if ignore_polarization:
+            if not isinstance(obs_file_path, list):
+                raise ValueError(
+                    "In observation mode ignoring polarization, observation data should be a list of [pol1_dir, pol2_dir, ...].")
+            else:
+                matched, _ = match_polarization_files(
+                    sorted([f for f in Path(obs_file_path[0]).iterdir() if f.suffix in [".fil", ".h5"]]) + sorted(
+                        [f for f in Path(obs_file_path[1]).iterdir() if f.suffix in [".fil", ".h5"]]))
+                obs_file_1st = matched[0]
         else:
-            if Path(obs_file_path).is_dir():
-                raise ValueError("In non-pipeline mode, observation data path should be a file, not a directory.")
-            # Use pipeline dataset for obs mode
-            print("[\033[32mInfo\033[0m] Using observation data from:", obs_file_path)
-            dataset = SETIWaterFullDataset(file_path=obs_file_path, patch_t=patch_t, patch_f=patch_f,
-                                           overlap_pct=overlap_pct, ignore_polarization=ignore_polarization,
-                                           stokes_mode=stokes_mode)
-            pred_dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
+            if isinstance(obs_file_path, list):
+                raise ValueError("In non-pipeline mode, observation data path should be a file, not a list.")
+            else:
+                if Path(obs_file_path).is_dir():
+                    raise ValueError("In non-pipeline mode, observation data path should be a file, not a directory.")
+                obs_file_1st = obs_file_path
+        # Use pipeline dataset for obs mode
+        print("[\033[32mInfo\033[0m] Using observation data from:", obs_file_1st)
+        dataset = SETIWaterFullDataset(file_path=obs_file_1st, patch_t=patch_t, patch_f=patch_f,
+                                       overlap_pct=overlap_pct, ignore_polarization=ignore_polarization,
+                                       stokes_mode=stokes_mode)
+        pred_dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
     else:
 
         pred_dataset = DynamicSpectrumDataset(mode=pmode, tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=fch1,
@@ -162,13 +200,6 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                                               noise_mean_min=noise_mean_min, noise_mean_max=noise_mean_max,
                                               noise_type=nosie_type, use_fil=use_fil, background_fil=background_fil)
         pred_dataloader = DataLoader(pred_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
-
-    def load_model(model_class, checkpoint_path, **kwargs):
-        model = model_class(**kwargs).to(device)
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        model.eval()
-        return model
 
     if mode == "dbl":
         global pred_dir
@@ -192,24 +223,6 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
 
     elif mode == "pipeline":
         print("[\033[32mInfo\033[0m] Running pipeline processing mode")
-
-        def match_polarization_files(files):
-            from collections import defaultdict
-            groups = defaultdict(list)
-            unmatched = []
-            for file_path in files:
-                # Extract base by removing _pol* part
-                stem = file_path.stem
-                if '_pol' in stem:
-                    base = stem.split('_pol')[0]
-                    groups[base].append(str(file_path))
-                else:
-                    unmatched.append(str(file_path))
-            matched_groups = [group for group in groups.values() if len(group) > 1]
-            for base, group in groups.items():
-                if len(group) == 1:
-                    unmatched.extend(group)
-            return matched_groups, unmatched
 
         all_files = []
         if ignore_polarization:

@@ -1,5 +1,6 @@
 import argparse
 import os
+
 import numpy as np
 from blimpy import Waterfall
 
@@ -93,7 +94,8 @@ def main():
 
     parser.add_argument("--output_format", choices=["fil", "h5"], default="fil", help="Output file format")
     parser.add_argument("--max_load", type=float, help="Max GB to load per chunk")
-    parser.add_argument("--output_dir", type=str, help="Output directory for sliced files (default: same as input file)")
+    parser.add_argument("--output_dir", type=str,
+                        help="Output directory for sliced files (default: same as input file)")
 
     args = parser.parse_args()
 
@@ -118,7 +120,22 @@ if __name__ == "__main__":
     # Output: large_data_chunk100000_part1.fil (format identical, but fchans=100,000)
     
     fname = '/media/rikoneko/c9f14f4a-975f-47f0-95c8-bb4804224489/yy/Kepler-438_M01_pol2.fil'
-    - python FILTERBANK_spiliter.py --f_start 1120 --f_end 1150
+    - python FILTERBANK_spiliter.py --f_start 1120 --f_stop 1150
     
     fname = './BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil'
+    
+    for many files in linux:
+
+for f in /data/Raid0/obs_data/33exoplanets/*/*M{08,10,12,14,16,18}*; do
+  python FILTERBANK_spiliter.py \
+    --f_start 1278 \
+    --f_stop 1380 \
+    --output_dir ./33exoplanets/bg/clean \
+    "$f"
+done
+
+for f in /data/Raid0/obs_data/33exoplanets/*/*M{08,10,12,14,16,18}*; do
+  python FILTERBANK_spiliter.py --f_start 1217.6 --f_stop 1237.6 --output_dir ./33exoplanets/bg/pollution "$f"
+  python FILTERBANK_spiliter.py --f_start 1258.29 --f_stop 1278.75 --output_dir ./33exoplanets/bg/pollution "$f"
+done
     """
