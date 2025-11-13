@@ -65,7 +65,7 @@ class DynamicSpectrumDataset(Dataset):
         self.noise_mean_max = noise_mean_max
         self.noise_type = noise_type
         self.waterfall_itr = None if not use_fil else split_waterfall_generator(background_fil, fchans, tchans=tchans,
-                                                                                f_shift=[fchans // 4, fchans])
+                                                                                f_shift=[fchans, 8 * fchans])
         # 动态计算总带宽和总时间
         self.total_bandwidth = self.fchans * self.df
         self.total_time = self.tchans * self.dt
@@ -311,7 +311,9 @@ def split_waterfall_generator(waterfall_fn, fchans, tchans=None, f_shift=None):
             if tchans is None:
                 t_keep = total_t
             elif tchans > total_t:
-                raise ValueError("tchans larger than observation length")
+                print(
+                    f"[\033[33mWarn\033[0m] tchans ({tchans}) larger than observation length ({total_t}) for file: {fn}, skipping")
+                continue
             else:
                 t_keep = tchans
 

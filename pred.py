@@ -36,7 +36,7 @@ snr_min = 15.0
 snr_max = 25.0
 width_min = 10
 width_max = 30
-num_signals = (1, 1)
+num_signals = (0, 1)
 noise_std_min = 0.025
 noise_std_max = 0.05
 noise_mean_min = 2
@@ -47,12 +47,13 @@ fil_folder = Path('./data/33exoplanets')
 background_fil = list(fil_folder.rglob("*.fil"))
 
 # Polarization config
-ignore_polarization = False
+ignore_polarization = True
 stokes_mode = "I"
 # XX_dir = "/data/Raid0/obs_data/33exoplanets/xx/"
 # YY_dir = "/data/Raid0/obs_data/33exoplanets/yy/"
 XX_dir = "./data/33exoplanets/xx/"
 YY_dir = "./data/33exoplanets/yy/"
+Beam = [1, 10]
 
 # Observation data
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
@@ -68,7 +69,7 @@ batch_size = 1  # ⚠️Fixed to 1 for now, cannot use batch_size > 1, which wil
 num_workers = 0
 pred_dir = "./pred_results"
 pred_steps = 100
-dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
+dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model_t3.pth"
 # dwtnet_ckpt = Path("./archived/weights/20250925_33e_det_realbk_none.pth")
 unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 P = 2
@@ -76,7 +77,7 @@ P = 2
 # NMS config
 nms_kargs = dict(
     iou_thresh=0.75,
-    score_thresh=0.3)
+    score_thresh=0.45)
 if pmode == 'yolo':
     nms_kargs['top_k'] = None
 
@@ -121,23 +122,57 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
         except Exception:
             return False
 
-    def match_polarization_files(files):
+    def match_polarization_files(files, M_list=None):
+        """
+        Match polarization files only for selected beams M_list.
+        Example M_list = [1,2,3] -> match M01, M02, M03
+
+        Args:
+            files: list of Path objects
+            M_list: list of integers for beam selection
+
+        Returns:
+            matched_groups (sorted), unmatched (sorted)
+        """
         from collections import defaultdict
         groups = defaultdict(list)
         unmatched = []
+        if M_list is not None:
+            # Convert [8,10] -> ["M08","M10"]
+            allowed_M = {f"M{m:02d}" for m in M_list}
+            print(f"[\033[32mInfo\033[0m] Selected beams: {sorted(allowed_M)}")
+        else:
+            allowed_M = None
+            print("[\033[32mInfo\033[0m] No beam filtering applied.")
+
         for file_path in files:
-            # Extract base by removing _pol* part
             stem = file_path.stem
-            if '_pol' in stem:
-                base = stem.split('_pol')[0]
-                groups[base].append(str(file_path))
-            else:
+
+            if "_pol" not in stem:
                 unmatched.append(str(file_path))
-        matched_groups = [group for group in groups.values() if len(group) > 1]
-        for base, group in groups.items():
-            if len(group) == 1:
+                continue
+            try:
+                parts = stem.split("_")
+                beam_name = next(p for p in parts if p.startswith("M") and len(p) == 3)
+            except StopIteration:
+                unmatched.append(str(file_path))
+                continue
+            if allowed_M is not None and beam_name not in allowed_M:
+                continue
+
+            base = stem.split("_pol")[0]
+            groups[(beam_name, base)].append(str(file_path))
+
+        matched_groups = []
+        for (beam_name, base), group in groups.items():
+            if len(group) > 1:
+                matched_groups.append((beam_name, group))
+            else:
                 unmatched.extend(group)
-        return matched_groups, unmatched
+
+        matched_groups = sorted(matched_groups, key=lambda x: int(x[0][1:]))
+        matched_groups = [g for (_, g) in matched_groups]
+        return matched_groups, sorted(unmatched)
 
     def load_model(model_class, checkpoint_path, **kwargs):
         model = model_class(**kwargs).to(device)

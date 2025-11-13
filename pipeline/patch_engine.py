@@ -23,8 +23,8 @@ else:  # Linux
 
 
 class SETIWaterFullDataset(Dataset):
-    def __init__(self, file_path, patch_t, patch_f, overlap_pct=0.02,
-                 device="cpu", ignore_polarization=False, stokes_mode="I"):
+    def __init__(self, file_path, patch_t, patch_f, overlap_pct=0.02, device="cpu", ignore_polarization=False,
+                 stokes_mode="I", t_adaptive=True):
         """
         A dataset class that extracts time-frequency patches from SETI filterbank files (.fil),
         optionally combining multiple polarization files into Stokes parameters.
@@ -41,6 +41,7 @@ class SETIWaterFullDataset(Dataset):
                 "I" → total intensity (xx + yy)
                 "Q" → linear polarization difference (xx − yy)
                 (reserved for "U", "V" in future)
+            t_adaptive (bool): adapt to different t channels (default: True)
         """
         self.device = device
         self.ignore_polarization = ignore_polarization
@@ -67,7 +68,10 @@ class SETIWaterFullDataset(Dataset):
         self.fchans = self.obs.selection_shape[2]
         self.freqs = self.obs.get_freqs()
 
-        assert patch_t <= self.tchans, "patch_t larger than available time channels."
+        if not t_adaptive:
+            assert patch_t <= self.tchans, "patch_t larger than available time channels."
+        else:
+            patch_t = self.tchans
         assert patch_f <= self.fchans, "patch_f larger than available frequency channels."
 
         overlap_t = round(patch_t * overlap_pct)
