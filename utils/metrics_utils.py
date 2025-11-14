@@ -5,6 +5,7 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
+from blimpy import Waterfall
 from matplotlib import pyplot as plt
 from scipy.ndimage import maximum_filter
 from scipy.signal import find_peaks
@@ -12,53 +13,108 @@ from scipy.signal import find_peaks
 from gen.SETIdataset import DynamicSpectrumDataset
 
 
-def SNR_filter(tensor_2d: torch.Tensor, top_fraction: float = 0.002, min_pixels: int = 50, ) -> float:
+def SNR_filter(tensor_2d: torch.Tensor, mode: str = "global_topk", top_fraction: float = 0.002, min_pixels: int = 50,
+               drift_hz_per_s: float = 0., df_hz: float = 7.450580597, dt_s: float = 10.200547328,
+               guard_bins: int = 3) -> float:
     """
-    Estimate the overall SNR from a 2D spectrogram.
+    Estimate SNR from a 2D spectrogram.
 
-    Definition:
-      1. Estimate the background noise σ using the median of the entire image plus MAD:
-           median = median(x)
-           MAD    = median(|x - median|)
-           σ      ≈ 1.4826 * MAD
-      2. Take the top_fraction brightest pixels (at least min_pixels) and calculate their average mean_top.
-      3. Return SNR = (mean_top - median) / σ
+    Two modes:
+      1) mode="global_topk"  (keep your original functionality, no changes)
+         - Flatten the entire image and take the top_fraction brightest pixels to compute mean_top
+         - SNR = (mean_top - median) / sigma
+      2) mode="dedrift_peak"
+         - Assume the first dimension is time T and the second dimension is frequency F
+         - Roll each frame along the frequency axis by the given drift rate to de-drift
+         - Average along the time dimension to obtain a 1D spectrum
+         - Use MAD in non-peak regions to estimate noise
+         - SNR = (peak - median_noise) / sigma_noise
+           This is closer to the definition in the paper / turboSETI
 
     Parameters:
         tensor_2d: 2D Tensor, shape (T, F) or (1, T, F) / (C, T, F)
+        mode: "global_topk" or "dedrift_peak"
         top_fraction: The proportion of the brightest pixels participating in the "signal average", e.g., 0.002 ≈ 0.2%
         min_pixels: The minimum number of pixels to be involved in the calculation to avoid instability when the patch is too small or top_fraction is too low.
+        drift_hz_per_s: Drift rate (Hz/s), must be provided for dedrift_peak mode
+        df_hz: Frequency resolution (Hz), must be provided for dedrift_peak mode
+        dt_s: Time resolution (s), must be provided for dedrift_peak mode
+        guard_bins: Number of frequency bins to exclude on either side of the peak for noise estimation
 
     Returns:
-        Python float scalar SNR; returns 0.0 if noise estimation fails or if there is an anomaly in the data.
+        Python float SNR; returns 0.0 on exception
     """
-    if tensor_2d.ndim == 3:
-        tensor_2d = tensor_2d.squeeze(0)
+    if tensor_2d.ndim == 3 and tensor_2d.shape[0] == 1:
+        tensor_2d = tensor_2d[0]
     if tensor_2d.ndim != 2:
         raise ValueError(f"[\033[31mError\033[0m] Expects 2D tensor, got shape {tuple(tensor_2d.shape)}")
 
-    x = tensor_2d.detach().float().cpu().view(-1)
-    if x.numel() < 4:
+    x2d = tensor_2d.detach().float().cpu()
+    T, F = x2d.shape
+    if T * F < 4:
         return 0.0
 
-    median = x.median()
-    mad = (x - median).abs().median()
-    sigma = mad * 1.4826
+    # mode global_topk
+    if mode == "global_topk":
+        x = x2d.reshape(-1)
 
-    if sigma <= 0 or torch.isnan(sigma) or torch.isinf(sigma):
-        return 0.0
+        median = x.median()
+        mad = (x - median).abs().median()
+        sigma = mad * 1.4826
 
-    k = max(min_pixels, int(top_fraction * x.numel()))
-    k = min(k, x.numel())
-    top_vals, _ = torch.topk(x, k)
+        if sigma <= 0 or torch.isnan(sigma) or torch.isinf(sigma):
+            return 0.0
 
-    mean_top = top_vals.mean()
-    snr = (mean_top - median) / sigma
-    snr_val = float(snr.item())
+        k = max(min_pixels, int(top_fraction * x.numel()))
+        k = min(k, x.numel())
+        top_vals, _ = torch.topk(x, k)
 
-    if not math.isfinite(snr_val):
-        return 0.0
-    return snr_val
+        mean_top = top_vals.mean()
+        snr = (mean_top - median) / sigma
+        snr_val = float(snr.item())
+        if not math.isfinite(snr_val):
+            return 0.0
+        return snr_val
+
+    # mode dedrift_peak
+    elif mode == "dedrift_peak":
+        if drift_hz_per_s is None or df_hz is None or dt_s is None:
+            raise ValueError("[\033[31mError\033[0m] mode='dedrift_peak' requires drift_hz_per_s, df_hz and dt_s.")
+        df_bin_hz = abs(df_hz)
+
+        dedrifted = torch.empty_like(x2d)
+        for t in range(T):
+            df_total_hz = drift_hz_per_s * (t * dt_s)
+            df_bins = df_total_hz / df_bin_hz
+            shift = int(round(df_bins))
+            dedrifted[t] = torch.roll(x2d[t], shifts=-shift, dims=-1)
+        spectrum = dedrifted.mean(dim=0)  # (F,)
+
+        peak_val, peak_idx = spectrum.max(dim=0)
+        mask = torch.ones_like(spectrum, dtype=torch.bool)
+        left = max(0, peak_idx.item() - guard_bins)
+        right = min(F, peak_idx.item() + guard_bins + 1)
+        mask[left:right] = False
+
+        noise_vals = spectrum[mask]
+        if noise_vals.numel() < 10:
+            return 0.0
+
+        median = noise_vals.median()
+        mad = (noise_vals - median).abs().median()
+        sigma = mad * 1.4826
+
+        if sigma <= 0 or torch.isnan(sigma) or torch.isinf(sigma):
+            return 0.0
+
+        snr = (peak_val - median) / sigma
+        snr_val = float(snr.item())
+        if not math.isfinite(snr_val):
+            return 0.0
+        return snr_val
+
+    else:
+        raise ValueError(f"[\033[31mError\033[0m] Unknown mode: {mode}")
 
 
 def execute_hits(patch: np.ndarray, tsamp: float, foff: float, max_drift: float = 4.0, min_drift: float = 0.0,
@@ -394,87 +450,110 @@ def execute_hits_hough(patch: np.ndarray, tsamp: float, foff: float, max_drift: 
 
 
 if __name__ == "__main__":
-    tchans = 144
-    fchans = 1024
-    df = 7.5
-    dt = 1.0
-    drift_min = -4.0
-    drift_max = 4.0
-    # drift_min_abs = df // (tchans * dt)
-    drift_min_abs = 0.0
-    dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=True,
-                                     drift_min=drift_min, drift_max=drift_max, drift_min_abs=drift_min_abs,
-                                     snr_min=50.0, snr_max=60.0, width_min=10, width_max=15, num_signals=(1, 1),
-                                     noise_std_min=0.025, noise_std_max=0.05)
+    test_case = "snr"
+    # test_case = "hits"
 
-    out_dir = "../pipeline/log/metrics_test"
-    os.makedirs(out_dir, exist_ok=True)
+    if test_case == "hits":
+        tchans = 144
+        fchans = 1024
+        df = 7.5
+        dt = 1.0
+        drift_min = -4.0
+        drift_max = 4.0
+        # drift_min_abs = df // (tchans * dt)
+        drift_min_abs = 0.0
+        dataset = DynamicSpectrumDataset(tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=True,
+                                         drift_min=drift_min, drift_max=drift_max, drift_min_abs=drift_min_abs,
+                                         snr_min=50.0, snr_max=60.0, width_min=10, width_max=15, num_signals=(1, 1),
+                                         noise_std_min=0.025, noise_std_max=0.05)
 
-    num_samples = 10
-    for i in range(num_samples):
-        noisy_spec, clean_spec, rfi_mask, phy_prob = dataset[i]  # Random generation each time
-        # spectrum = noisy_spec
-        spectrum = clean_spec
+        out_dir = "../pipeline/log/metrics_test"
+        os.makedirs(out_dir, exist_ok=True)
 
-
-        def add_gaussian_noise(clean_spec, noise_level=0.01):
-            noise = np.random.normal(loc=0.0, scale=noise_level, size=clean_spec.shape)
-            noisy_spec = clean_spec + noise
-            return noisy_spec
+        num_samples = 10
+        for i in range(num_samples):
+            noisy_spec, clean_spec, _, phy_prob = dataset[i]  # Random generation each time
+            # spectrum = noisy_spec
+            spectrum = clean_spec
 
 
-        spectrum = add_gaussian_noise(spectrum, noise_level=0.1)
-
-        # Plot spectrogram
-        spec = spectrum.squeeze()
-        plt.figure(figsize=(15, 3))
-        plt.imshow(spec, aspect='auto', origin='lower', cmap='viridis')
-        plt.title(f"Clean spectrogram #{i}")
-        plt.colorbar()
-
-        # Execute hits_peaks on spectrogram
-        patch = spectrum.squeeze()
-        foff = -df if not dataset.ascending else df  # Since ascending=False, foff negative
-        # hits = execute_hits(patch, tsamp=dt, foff=foff, max_drift=drift_max, min_drift=drift_min_abs, snr_threshold=10.0)
-        # hits = execute_hits_peaks(patch, tsamp=dt, foff=foff, max_drift=drift_max, min_drift=drift_min_abs,snr_threshold=10.0)
-        hits = execute_hits_hough(patch, tsamp=dt, foff=foff, max_drift=drift_max, min_drift=drift_min,
-                                  snr_threshold=10.0, min_abs_drift=drift_min_abs, merge_tol=1000)
+            def add_gaussian_noise(clean_spec, noise_level=0.01):
+                noise = np.random.normal(loc=0.0, scale=noise_level, size=clean_spec.shape)
+                noisy_spec = clean_spec + noise
+                return noisy_spec
 
 
-        # Function to plot lines for hits
-        def plot_hits_lines(hits, color='r', label='Fit'):
+            spectrum = add_gaussian_noise(spectrum, noise_level=0.1)
+
+            # Plot spectrogram
+            spec = spectrum.squeeze()
+            plt.figure(figsize=(15, 3))
+            plt.imshow(spec, aspect='auto', origin='lower', cmap='viridis')
+            plt.title(f"Clean spectrogram #{i}")
+            plt.colorbar()
+
+            # Execute hits_peaks on spectrogram
+            patch = spectrum.squeeze()
+            foff = -df if not dataset.ascending else df  # Since ascending=False, foff negative
+            # hits = execute_hits(patch, tsamp=dt, foff=foff, max_drift=drift_max, min_drift=drift_min_abs, snr_threshold=10.0)
+            # hits = execute_hits_peaks(patch, tsamp=dt, foff=foff, max_drift=drift_max, min_drift=drift_min_abs,snr_threshold=10.0)
+            hits = execute_hits_hough(patch, tsamp=dt, foff=foff, max_drift=drift_max, min_drift=drift_min,
+                                      snr_threshold=10.0, min_abs_drift=drift_min_abs, merge_tol=1000)
+
+
+            # Function to plot lines for hits
+            def plot_hits_lines(hits, color='r', label='Fit'):
+                if hits.empty:
+                    return
+
+                for i, (_, hit) in enumerate(hits.iterrows()):
+                    drift_rate = hit['DriftRate']
+                    uncorr_freq = hit['Uncorrected_Frequency']
+                    chan_start = uncorr_freq / foff
+                    drift_rate_chan = drift_rate * dt / foff
+                    t_vals = np.arange(0, tchans)
+                    chan_vals = chan_start + drift_rate_chan * t_vals
+                    plt.plot(chan_vals, t_vals, color + '--', label=label if i == 0 else None, alpha=0.3)
+                plt.legend()
+
+
+            # Plot lines for peaks fit method
+            plot_hits_lines(hits)
+
+            plt.tight_layout()
+            clean_path = os.path.join(out_dir, f"clean_{i:03d}.png")
+            plt.savefig(clean_path)
+            plt.close()
+            print(f"[\033[32mInfo\033[0m] Saved clean plot with Peaks Fit lines to {clean_path}")
+
+            # Print to console
+            print(f"\n[\033[36mMetrics\033[0m] \nSample {i}: phy_prob = {phy_prob}")
+            print("Peaks Fit hits:")
             if hits.empty:
-                return
+                print("No hits detected.")
+            else:
+                print(hits)
 
-            for i, (_, hit) in enumerate(hits.iterrows()):
-                drift_rate = hit['DriftRate']
-                uncorr_freq = hit['Uncorrected_Frequency']
-                chan_start = uncorr_freq / foff
-                drift_rate_chan = drift_rate * dt / foff
-                t_vals = np.arange(0, tchans)
-                chan_vals = chan_start + drift_rate_chan * t_vals
-                plt.plot(chan_vals, t_vals, color + '--', label=label if i == 0 else None, alpha=0.3)
-            plt.legend()
+            # Save hits to CSV
+            hits_path = os.path.join(out_dir, f"hits_{i:03d}.csv")
+            hits.to_csv(hits_path, index=False)
+            print(f"[\033[32mInfo\033[0m] Saved hits to {hits_path}")
 
-
-        # Plot lines for peaks fit method
-        plot_hits_lines(hits)
-
-        plt.tight_layout()
-        clean_path = os.path.join(out_dir, f"clean_{i:03d}.png")
-        plt.savefig(clean_path)
-        plt.close()
-        print(f"[\033[32mInfo\033[0m] Saved clean plot with Peaks Fit lines to {clean_path}")
-
-        # Print to console
-        print(f"\n[\033[36mMetrics\033[0m] \nSample {i}: phy_prob = {phy_prob}")
-        print("Peaks Fit hits:")
-        if hits.empty:
-            print("No hits detected.")
+    if test_case == "snr":
+        demo = False
+        if demo:
+            torch.manual_seed(0)
+            noise = torch.randn(224, 224)
+            print("noise SNR:", SNR_filter(noise, mode="global_topk"))  # ~3
+            patch = noise.clone()
+            patch[100:120, 110:130] += 5.0
+            print("with signal SNR:", SNR_filter(patch, mode="global_topk"))  # ~6+
         else:
-            print(hits)
-
-        # Save hits to CSV
-        hits_path = os.path.join(out_dir, f"hits_{i:03d}.csv")
-        hits.to_csv(hits_path, index=False)
-        print(f"[\033[32mInfo\033[0m] Saved hits to {hits_path}")
+            fname = "../data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil"
+            f_start = 1140.6036
+            f_stop = 1140.6044
+            wf = Waterfall(fname, f_start=f_start, f_stop=f_stop)
+            wf.plot_waterfall(f_start=f_start, f_stop=f_stop)
+            plt.show()
+            print(SNR_filter(torch.from_numpy(wf.data.squeeze(1)), mode="dedrift_peak", drift_hz_per_s=0.0678,
+                             df_hz=7.450580597, dt_s=10.200547328))

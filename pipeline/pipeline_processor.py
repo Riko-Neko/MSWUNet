@@ -5,13 +5,14 @@ from pathlib import Path
 import pandas as pd
 import torch
 
-from utils.metrics_utils import execute_hits_hough
-from utils.det_utils import decode_F
+from utils.det_utils import decode_F, extract_F_slice
+from utils.metrics_utils import execute_hits_hough, SNR_filter
 
 
 class SETIPipelineProcessor:
     def __init__(self, dataset, model, device, mode='mask', log_dir=Path("./pipeline/log"), verbose=False,
-                 drift=[-4.0, 4.0], snr_threshold=5.0, min_abs_drift=0.05, iou_thresh=0.5, score_thresh=0.5, top_k=10):
+                 drift=[-4.0, 4.0], snr_threshold=10.0, pad_fraction=0.2, min_abs_drift=0.05, iou_thresh=0.5,
+                 score_thresh=0.5, top_k=10, fsnr_threshold=300, top_fraction=0.002, min_pixels=50):
         """
         Initialize the SETI pipeline processor with dataset and model
 
@@ -24,10 +25,15 @@ class SETIPipelineProcessor:
             verbose: Whether to use simple console output
             drift: Drift rate range for mask mode [min_drift, max_drift] in Hz/s
             snr_threshold: SNR threshold for mask mode hits detection
+            pad_fraction: Fraction of extents to pad the events in detection.
             min_abs_drift: Minimum absolute drift rate for mask mode
             iou_thresh: IoU threshold for detection mode NMS
             score_thresh: Confidence threshold for detection mode NMS
             top_k: Maximum number of detections to keep per patch
+            fsnr_threshold: SNR threshold for denoised trigger criteria
+            top_fraction: The proportion of the brightest pixels participating in the "signal average".
+            min_pixels: The minimum number of pixels to be involved in the calculation.
+
         """
         assert mode in ['mask', 'detection'], f"Unsupported mode: {mode}"
 
@@ -35,6 +41,7 @@ class SETIPipelineProcessor:
         self.model = model.to(device)
         self.device = device
         self.mode = mode
+        self.snr_threshold = snr_threshold
 
         # Grid dimensions
         self.grid_height = len(dataset.start_t_list)
@@ -58,12 +65,15 @@ class SETIPipelineProcessor:
         # Mode-specific parameters
         if self.mode == 'mask':
             self.drift = drift
-            self.snr_threshold = snr_threshold
             self.min_abs_drift = min_abs_drift
         else:  # detection mode
             self.nms_iou_thresh = iou_thresh
             self.nms_score_thresh = score_thresh
             self.nms_top_k = top_k
+            self.fSNR_threshold = fsnr_threshold
+            self.top_fraction = top_fraction
+            self.min_pixels = min_pixels
+            self.pad_fraction = pad_fraction
 
         # Logging setup
         if log_dir != Path("./pipeline/log"):
@@ -93,7 +103,7 @@ class SETIPipelineProcessor:
             except Exception as e:
                 self.logger.error(f"Failed to remove existing hits file: {e}")
 
-    def _process_detection_hits(self, raw_preds, freq_range, time_range):
+    def _process_detection_hits(self, raw_preds, freq_range, time_range, events_patch=None):
         """
         Process detection mode predictions to generate hits information
 
@@ -101,12 +111,15 @@ class SETIPipelineProcessor:
             raw_preds: Raw detection predictions from model
             freq_range: Frequency range tuple (min_freq, max_freq) in MHz
             time_range: Time range tuple (start_time, end_time) in seconds
+            events_patch: Slice of events from the patch
 
         Returns:
             df_hits: DataFrame containing detection hits information
         """
         # Decode predictions
         det_outs = decode_F(raw_preds, iou_thresh=self.nms_iou_thresh, score_thresh=self.nms_score_thresh)  # dict
+        if det_outs["f_start"].shape[1] == 0:
+            return pd.DataFrame()
         f_starts = det_outs["f_start"][0].cpu().numpy()
         f_stops = det_outs["f_end"][0].cpu().numpy()
         confidence = det_outs["confidence"][0].cpu().numpy()
@@ -117,8 +130,27 @@ class SETIPipelineProcessor:
         time_start, time_end = time_range
         time_duration = time_end - time_start
 
+        patch_to_slice = None
+        if events_patch is not None:
+            try:
+                if isinstance(events_patch, torch.Tensor):
+                    patch_to_slice = events_patch.detach().float()
+                else:
+                    patch_to_slice = torch.as_tensor(events_patch, dtype=torch.float32)
+
+                if patch_to_slice.ndim == 3:
+                    patch_to_slice = patch_to_slice[0]
+                if patch_to_slice.ndim != 2:
+                    raise ValueError(
+                        f"[\033[31mError\033[0m] input_patch must be 2D after squeeze, got {tuple(patch_to_slice.shape)}")
+            except Exception as e:
+                self.logger.warning(f"Failed to prepare input patch for SNR estimation: {e}")
+                patch_to_slice = None
+
         # Convert normalized frequency coordinates to absolute MHz
         for class_id, f_start_norm, f_stop_norm, confidence in zip(classes, f_starts, f_stops, confidence):
+            if class_id < 0:
+                continue
             # Convert normalized frequencies to absolute frequencies (MHz)
             f_start = freq_min + (freq_max - freq_min) * f_start_norm
             f_stop = freq_min + (freq_max - freq_min) * f_stop_norm
@@ -131,15 +163,31 @@ class SETIPipelineProcessor:
             # Determine uncorrected frequency (starting frequency)
             uncorr_freq = f_start if f_start_norm <= f_stop_norm else f_stop
 
+            snr_val = 0.0
+            if patch_to_slice is not None:
+                try:
+                    roi, f_start_pad, f_stop_pad, _, _ = extract_F_slice(patch_to_slice, f_start_norm, f_stop_norm,
+                                                                         pad_fraction=self.pad_fraction)
+                    snr_val = SNR_filter(roi, mode="dedrift_peak", drift_hz_per_s=drift_rate, df_hz=self.foff,
+                                         dt_s=self.tsamp)
+                except Exception as e:
+                    self.logger.warning(f"Failed to estimate SNR for detection: {e}")
+                    snr_val = 0.0
+            if self.snr_threshold is not None and self.snr_threshold > 0 and snr_val < self.snr_threshold:
+                continue
+
             hits.append({
                 'DriftRate': drift_rate,
-                'SNR': 0.0,  # SNR not available in detection mode
+                'SNR': snr_val,
                 'Uncorrected_Frequency': uncorr_freq,
                 'freq_start': min(f_start, f_stop),
                 'freq_end': max(f_start, f_stop),
                 'class_id': class_id,
                 'confidence': confidence
             })
+
+        if not hits:
+            return pd.DataFrame()
 
         return pd.DataFrame(hits)
 
@@ -157,6 +205,7 @@ class SETIPipelineProcessor:
         # Get data
         patch_data, freq_range, time_range_idx = self.dataset.get_patch(row, col)
         time_range = (time_range_idx[0] * self.tsamp, time_range_idx[1] * self.tsamp)
+        raw_patch = patch_data[0]
 
         # Prepare data
         patch_data = patch_data.to(self.device).unsqueeze(0)  # (1, 1, t, f)
@@ -174,6 +223,12 @@ class SETIPipelineProcessor:
                     denoised = outputs[0]
                     regs_dict = outputs[1] if len(outputs) > 1 else None
 
+                try:
+                    patch_snr = SNR_filter(denoised.squeeze(), mode="global_topk", top_fraction=self.top_fraction,
+                                           min_pixels=self.min_pixels)
+                except Exception:
+                    patch_snr = 0.0
+
                 # Use maximum detection confidence as patch confidence
                 confidence = 0.0
                 if regs_dict is not None:
@@ -186,7 +241,7 @@ class SETIPipelineProcessor:
                         confidence = confidences.max().item() if confidences.numel() > 0 else 0.0
 
                 # Determine status based on confidence
-                if confidence > self.nms_score_thresh:
+                if (confidence > self.nms_score_thresh) and (patch_snr >= self.fSNR_threshold):
                     status = True
                 else:
                     status = False
@@ -195,8 +250,7 @@ class SETIPipelineProcessor:
                 hits_info = None
                 df_hits = pd.DataFrame()
                 if status is True and regs_dict is not None:
-                    df_hits = self._process_detection_hits(regs_dict, freq_range, time_range)
-
+                    df_hits = self._process_detection_hits(regs_dict, freq_range, time_range, events_patch=raw_patch)
 
             else:  # 'mask' mode as default
                 # Mask mode: denoised, mask, logits
@@ -290,6 +344,7 @@ class SETIPipelineProcessor:
                         f"[\033[36mHit\033[0m] Found signal {idx + 1}: "
                         f"Class=\033[32m{hit_row['class_id']}\033[0m, "
                         f"Confidence=\033[32m{hit_row['confidence']:.2f}\033[0m, "
+                        f"SNR=\033[32m{hit_row['SNR']:.2f}\033[0m, "
                         f"DriftRate=\033[32m{hit_row['DriftRate']:.4f} Hz/s\033[0m, "
                         f"Freq=\033[32m{hit_row['Uncorrected_Frequency']:.6f}\033[0m Mhz, "
                         f"Range=[{hit_row['freq_start']:.6f}, {hit_row['freq_end']:.6f}] MHz"

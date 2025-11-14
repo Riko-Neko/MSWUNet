@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+DEBUG = False
+
 
 def decode_F(out: Dict[str, torch.Tensor], iou_thresh: float = 0.5, score_thresh: float = 0.2,
              apply_filtering: bool = True) -> Dict[str, torch.Tensor]:
@@ -24,7 +26,6 @@ def decode_F(out: Dict[str, torch.Tensor], iou_thresh: float = 0.5, score_thresh
         Other batches are cropped or padded to match M.
         Padded entries have confidence=0, class_id=-1, f_start=0, f_end=0.
     """
-    DEBUG = True
     f_start = torch.sigmoid(out["f_start"])
     f_end = torch.sigmoid(out["f_end"])
     confidence = torch.sigmoid(out["confidence"])
@@ -123,7 +124,80 @@ def decode_F(out: Dict[str, torch.Tensor], iou_thresh: float = 0.5, score_thresh
     return batched
 
 
-def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'], linestyle='--', linewidth=0.5):
+def extract_F_slice(tensor_2d: torch.Tensor, f_start_norm: float, f_stop_norm: float, pad_fraction: float = 0.2):
+    """
+    Slice a frequency sub-band from the original input 2D image based on (f_start_norm, f_stop_norm) + left/right padding.
+
+    Args:
+        tensor_2d: (T, F) input 2D image
+        f_start_norm: start frequency (normalized)
+        f_stop_norm: stop frequency (normalized)
+        pad_fraction: fraction of the frequency bandwidth to pad on both sides (default: 0.2)
+
+    Returns:
+        sliced: the sliced 2D patch (T, F_slice)
+        f_start_pad, f_stop_pad: the normalized start and stop after padding (maintaining the original direction: positive drift/negative drift)
+        idx_start, idx_end: integer indices on the frequency dimension
+
+    Notes:
+      - f_start_norm, f_stop_norm ∈ [0, 1] (relative to the frequency range of this patch)
+      - pad_fraction defaults to 0.2, corresponding to an expansion of 20% of the normalized bandwidth on both sides
+      - Supports negative drift cases: if f_start_norm > f_stop_norm, the original direction is maintained
+    """
+    pad_fraction = 0.2 if pad_fraction is None else pad_fraction
+    if not isinstance(tensor_2d, torch.Tensor):
+        tensor_2d = torch.as_tensor(tensor_2d)
+    x = tensor_2d
+    if x.ndim == 4:
+        x = x.squeeze(0).squeeze(0)
+    elif x.ndim == 3:
+        x = x.squeeze(0)
+    if x.ndim != 2:
+        raise ValueError(
+            f"[\033[31mError\033[0m] extract_freq_slice_with_padding expects 2D tensor, got shape {tuple(x.shape)}")
+
+    T, F = x.shape
+    if F <= 1:
+        return x, f_start_norm, f_stop_norm, 0, max(F - 1, 0)
+
+    # clamp to [0, 1]
+    f0 = float(f_start_norm)
+    f1 = float(f_stop_norm)
+    f0 = max(0.0, min(1.0, f0))
+    f1 = max(0.0, min(1.0, f1))
+
+    if pad_fraction < 0:
+        pad_fraction = 0.0
+
+    f_min = min(f0, f1)
+    f_max = max(f0, f1)
+
+    f_min_pad = max(0.0, f_min - pad_fraction)
+    f_max_pad = min(1.0, f_max + pad_fraction)
+
+    # Normalize [0,1] → to index [0, F-1]
+    idx_start = int(round(f_min_pad * (F - 1)))
+    idx_end = int(round(f_max_pad * (F - 1)))
+
+    idx_start = max(0, min(F - 1, idx_start))
+    idx_end = max(0, min(F - 1, idx_end))
+    if idx_end < idx_start:
+        idx_start, idx_end = idx_end, idx_start
+
+    sliced = x[:, idx_start:idx_end + 1]
+
+    if f0 <= f1:
+        f_start_pad = f_min_pad
+        f_stop_pad = f_max_pad
+    else:
+        f_start_pad = f_max_pad
+        f_stop_pad = f_min_pad
+
+    return sliced, f_start_pad, f_stop_pad, idx_start, idx_end
+
+
+def plot_F_lines(ax, freqs, pred_boxes, normalized=True, snrs=None, color=['red', 'green'], linestyle='--',
+                 linewidth=0.5):
     """
     Plot detected frequency start/stop as **vertical lines** (not boxes).
     Preserves physical meaning: f_start > f_stop means negative drift.
@@ -138,6 +212,7 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'],
             - f_starts: list/array of start freq (normalized or pixel)
             - f_stops:  list/array of stop freq
         normalized (bool): If True, f_starts/f_stops in [0,1]
+        snrs (array-like): Array of SNR values (length = N).
         color (list[str]): List of colors, must have length >= (max_class_id + 1)
         linestyle, linewidth: matplotlib line style
     """
@@ -158,6 +233,11 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'],
         elif isinstance(x, list):
             x = np.array(x)
         return np.asarray(x)
+
+    def get_snr(i):
+        if i < len(snrs):
+            return snrs[i]
+        return "unknown"
 
     f_starts, f_stops, classes = map(to_numpy, (f_starts, f_stops, classes))
 
@@ -197,7 +277,11 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, color=['red', 'green'],
     start_idx = np.clip(start_idx, 0, len(freqs) - 1)
     stop_idx = np.clip(stop_idx, 0, len(freqs) - 1)
 
-    for cls, s_idx, e_idx in zip(classes, start_idx, stop_idx):
+    for i, (cls, s_idx, e_idx) in enumerate(zip(classes, start_idx, stop_idx)):
         col = colors[cls]
         ax.axvline(freqs[s_idx], color=col, linestyle=linestyle, linewidth=linewidth, alpha=0.8)
         ax.axvline(freqs[e_idx], color=col, linestyle=linestyle, linewidth=linewidth, alpha=0.8)
+        if snrs is not None:
+            y_min, y_max = ax.get_ylim()
+            ax.text(freqs[s_idx], y_max * 0.1, round(get_snr(i), 2), ha='center', va='bottom', fontsize=12,
+                    color='black', bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))

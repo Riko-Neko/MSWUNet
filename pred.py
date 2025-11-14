@@ -32,8 +32,8 @@ ascending = True
 drift_min = -4.0
 drift_max = 4.0
 drift_min_abs = df // (tchans * dt)
-snr_min = 15.0
-snr_max = 25.0
+snr_min = 15
+snr_max = 35
 width_min = 10
 width_max = 30
 num_signals = (0, 1)
@@ -50,12 +50,12 @@ background_fil = list(fil_folder.rglob("*.fil"))
 # Polarization config
 ignore_polarization = True
 stokes_mode = "I"
-XX_dir = "/data/Raid0/obs_data/33exoplanets/xx/"
-YY_dir = "/data/Raid0/obs_data/33exoplanets/yy/"
-# XX_dir = "./data/33exoplanets/xx/"
-# YY_dir = "./data/33exoplanets/yy/"
-Beam = [1, 10]
-# Beam = None
+# XX_dir = "/data/Raid0/obs_data/33exoplanets/xx/"
+# YY_dir = "/data/Raid0/obs_data/33exoplanets/yy/"
+XX_dir = "./data/33exoplanets/xx/"
+YY_dir = "./data/33exoplanets/yy/"
+# Beam = [1, 10]
+Beam = None
 
 # Observation data
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
@@ -79,14 +79,24 @@ P = 2
 
 # NMS config
 nms_kargs = dict(
-    iou_thresh=0.75,
+    iou_thresh=0.5,
     score_thresh=0.3)
 if pmode == 'yolo':
     nms_kargs['top_k'] = None
 
-# hits conf info
-drift = [-4.0, 4.0]
-snr_threshold = 20.0
+# hits config
+drift = [-4.0, 4.0]  # work only for mask mode
+snr_threshold = 0
+pad_fraction = 0.5
+fsnr_args = dict(
+    fsnr_threshold=300,
+    top_fraction=0.001,
+    min_pixels=50)
+dedrift_args = dict(
+    df_hz=df,
+    dt_s=dt,
+    guard_bins=3
+)
 
 # Model config
 dim = 64
@@ -343,7 +353,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                 app = QApplication(sys.argv)
                 renderer = SETIWaterfallRenderer(dataset, model, device, mode=pmode, log_dir=f_log_dir, drift=drift,
                                                  snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
-                                                 verbose=verbose, **nms_kargs)
+                                                 verbose=verbose, **nms_kargs, **fsnr_args)
                 renderer.setWindowTitle(f"SETI Waterfall Data Processor - {f_log_dir}")
                 renderer.show()
                 if idx == len(file_list) - 1:
@@ -354,8 +364,9 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
             else:
                 print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
                 processor = SETIPipelineProcessor(dataset, model, device, mode=pmode, log_dir=f_log_dir, drift=drift,
-                                                  snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
-                                                  verbose=verbose, **nms_kargs)
+                                                  snr_threshold=snr_threshold, pad_fraction=pad_fraction,
+                                                  min_abs_drift=drift_min_abs, verbose=verbose, **nms_kargs,
+                                                  **fsnr_args)
                 processor.process_all_patches()
 
     else:
@@ -366,13 +377,13 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
             dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
             pred(dwtnet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
-                 save_npy=False, plot=True, **nms_kargs)
+                 save_npy=False, plot=True, group_nms=nms_kargs, group_fsnr=fsnr_args, group_dedrift=dedrift_args)
         # --- 推理 UNet ---
         if execute1:
             print("[\033[32mInfo\033[0m] Running UNet inference...")
             unet = load_model(UNet, unet_ckpt, **unet_args)
             pred(unet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
-                 save_npy=False, plot=True, **nms_kargs)
+                 save_npy=False, plot=True, group_nms=nms_kargs, group_fsnr=fsnr_args, group_dedrift=dedrift_args)
 
 
 if __name__ == "__main__":

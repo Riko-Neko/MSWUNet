@@ -7,8 +7,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from utils.det_utils import decode_F, plot_F_lines
+from utils.det_utils import decode_F, plot_F_lines, extract_F_slice
 from utils.metrics_utils import SNR_filter
+
+DEBUG = True
 
 
 def _process_batch_core(model, batch, device, mode):
@@ -32,29 +34,27 @@ def _process_batch_core(model, batch, device, mode):
         - raw_preds: Raw predictions (if available, for detection mode)
     """
     # Handle different input formats (single tensor or tuple/list)
+    clean = None
+    rfi_mask = None
+    gt_boxes = None
     if isinstance(batch, (list, tuple)):
         inputs = batch[0].to(device)
-        clean = None
 
         if mode == 'detection':
-            rfi_mask = None
-            gt_boxes = None
             if len(batch) > 1 and isinstance(batch[1], torch.Tensor):
                 clean = batch[1].to(device)
             if len(batch) > 2 and isinstance(batch[2], torch.Tensor):
-                gt_boxes = batch[-1].to(device)
+                gt_boxes = batch[2].to(device)
+            if len(batch) > 3 and isinstance(batch[3], list):
+                mean, std = batch[-1]
+
         else:  # 'mask' as default
-            rfi_mask = None
-            gt_boxes = None
             if len(batch) > 1 and isinstance(batch[1], torch.Tensor):
                 clean = batch[1].to(device)
             if len(batch) > 2 and isinstance(batch[2], torch.Tensor):
                 rfi_mask = batch[2].to(device)
     else:
         inputs = batch.to(device)
-        clean = None
-        rfi_mask = None
-        gt_boxes = None
 
     # Get model predictions
     outputs = model(inputs)
@@ -89,7 +89,7 @@ def _process_batch_core(model, batch, device, mode):
 
 
 def _save_batch_results(results, idx, save_dir, model_class_name, mode='detection', save_npy=False, plot=True,
-                        **nms_kwargs):
+                        **kwarg_groups):
     """
     Save and visualize results for a single batch
 
@@ -101,7 +101,7 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
         mode: 'mask' or 'detection'
         save_npy: Whether to save numpy arrays
         plot: Whether to generate visualization plots
-        **nms_kwargs: Keyword arguments for NMS (if applicable)
+        **kwarg_groups: Additional arguments for NMS (group1), SNR calculation (group2) and dedrift peak (group3) (if applicable)
     """
     # Create plot directory if needed
     plot_dir = Path(save_dir) / "plots" / model_class_name
@@ -127,10 +127,16 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
         denoised_spec = results["denoised"][0].cpu().squeeze().numpy()
         clean_spec = (results["clean"][0].cpu().squeeze().numpy()
                       if results["clean"] is not None else None)
-        SNR_est = SNR_filter(results["denoised"][0])
-        # print(f"[\033[36mDebug\033[0m] Estimated SNR={SNR_est:.2f}")
-        freq_axis = np.arange(noisy_spec.shape[1])
+        kwarg_groups["group_fsnr"].pop("fsnr_threshold", None)
+        pad_fraction = kwarg_groups["group_fsnr"].pop("pad_fraction", None)
+        SNR_est = SNR_filter(results["denoised"][0], **kwarg_groups["group_fsnr"])
+        if DEBUG:
+            print(f"[\033[36mDebug\033[0m] Estimated SNR={SNR_est:.2f}")
+        freq_frames = noisy_spec.shape[1]
+        freq_axis = np.arange(freq_frames)
         time_frames = noisy_spec.shape[0]
+        time_duration = time_frames * kwarg_groups["group_dedrift"]["dt_s"]
+        freq_duration = freq_frames * kwarg_groups["group_dedrift"]["df_hz"]
 
         if mode == 'mask':
             pred_mask_np = (results["pred_mask"][0].cpu().squeeze().numpy()
@@ -177,28 +183,58 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
             # Process predictions
             pred_boxes_tuple = None
             if results["raw_preds"] is not None:
-                det_outs = decode_F(results["raw_preds"], **nms_kwargs)  # dict
+                det_outs = decode_F(results["raw_preds"], **kwarg_groups["group_nms"])  # dict
                 f_starts = det_outs["f_start"][0].cpu().numpy()
                 f_stops = det_outs["f_end"][0].cpu().numpy()
                 N_pred = det_outs["confidence"].shape[1]
                 classes = det_outs["class"][0].cpu().numpy()
                 pred_boxes_tuple = (N_pred, classes, f_starts, f_stops)
 
-                # Process ground truth boxes
+            # Process ground truth boxes
             gt_boxes_tuple = None
+            snr_vals = []
+            drift_rates = []
             if results["gt_boxes"] is not None:
+                events_patch = results["inputs"][0]
                 gt_boxes = results["gt_boxes"][0].cpu().numpy()  # Assuming (N_gt, 2) or similar, [start, stop]
                 gt_starts = gt_boxes[:, 0]
                 gt_stops = gt_boxes[:, 1]
                 gt_classes = gt_boxes[:, 2]
                 N_gt = len(gt_starts)
                 gt_boxes_tuple = (N_gt, gt_classes, gt_starts, gt_stops)
+                # calculate hits SNR
+                patch_to_slice = None
+                for i, (f_start_norm, f_stop_norm) in enumerate(zip(gt_starts, gt_stops)):
+                    if gt_starts[i] != gt_starts[i]:  # nan != nan
+                        continue
+                    snr_val = 0.0
+                    freq_change_hz = (f_stop_norm - f_start_norm) * freq_duration
+                    drift_rate = float(freq_change_hz / time_duration) if time_duration > 0 else 0.0
+                    if events_patch.ndim == 3:
+                        patch_to_slice = events_patch[0]
+                    if patch_to_slice.ndim != 2:
+                        raise ValueError(
+                            f"[\033[31mError\033[0m] input_patch must be 2D after squeeze, got {tuple(patch_to_slice.shape)}")
+                    if patch_to_slice is not None:
+                        try:
+                            roi, f_start_pad, f_stop_pad, _, _ = extract_F_slice(events_patch, f_start_norm,
+                                                                                 f_stop_norm, pad_fraction=pad_fraction)
+                            snr_val = SNR_filter(roi, mode="dedrift_peak", drift_hz_per_s=drift_rate,
+                                                 **kwarg_groups["group_dedrift"])
+                        except Exception as e:
+                            print(f"[\033[31mError\033[0m] Failed to estimate SNR for detection: {e}")
+                            snr_val = 0.0
+                    snr_vals.append(snr_val)
+                    if DEBUG:
+                        drift_rates.append(drift_rate)
+                if DEBUG:
+                    print(f"[\033[36mDebug\033[0m] SNR: {snr_vals}, drift_rate: {drift_rates}")
 
             # Create figure with subplots
             fig, axs = plt.subplots(3, 1, figsize=(14, 21))
 
-            def plot_spec(ax, data, title, cmap='viridis', boxes=None, normalized=False, color=['red', 'green'],
-                          linestyle='--', linewidth=2):
+            def plot_spec(ax, data, title, cmap='viridis', boxes=None, normalized=False, snrs=None,
+                          color=['red', 'green'], linestyle='--', linewidth=2):
                 """Helper function to plot spectrum data with optional boxes"""
                 im = ax.imshow(data, aspect='auto', origin='lower',
                                extent=[freq_axis[0], freq_axis[-1], 0, time_frames], cmap=cmap)
@@ -206,15 +242,16 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
                 ax.set_ylabel("Time Frame")
                 fig.colorbar(im, ax=ax, label="Intensity")
                 if boxes is not None:
-                    plot_F_lines(ax, freq_axis, boxes, normalized=normalized, color=color, linestyle=linestyle,
-                                 linewidth=linewidth)
+                    plot_F_lines(ax, freq_axis, boxes, normalized=normalized, snrs=snrs, color=color,
+                                 linestyle=linestyle, linewidth=linewidth)
 
             # Plot all components
             plot_spec(axs[0], clean_spec if clean_spec is not None else np.zeros_like(noisy_spec),
                       "Clean Spectrum")
-            plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis', boxes=gt_boxes_tuple, normalized=True)
-            plot_spec(axs[2], denoised_spec, "Denoised Spectrum", cmap='viridis', normalized=True,
-                      boxes=pred_boxes_tuple)
+            plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis', boxes=gt_boxes_tuple,
+                      normalized=True, snrs=snr_vals)
+            plot_spec(axs[2], denoised_spec, "Denoised Spectrum", cmap='viridis', boxes=pred_boxes_tuple,
+                      normalized=True)
             axs[2].text(0.98, 0.95, f"SNR={SNR_est:.2f}", transform=axs[2].transAxes, ha='right', va='top', fontsize=12,
                         bbox=dict(facecolor='white', alpha=0.7))
 
@@ -241,7 +278,7 @@ def pred(model: torch.nn.Module,
          idx: Optional[int] = None,
          save_npy: bool = True,
          plot: bool = False,
-         **nms_kwargs):
+         **kwarg_groups):
     """
     Unified prediction function that handles both batch and dataloader processing, and pipeline mode
 
@@ -258,7 +295,7 @@ def pred(model: torch.nn.Module,
         idx: For batch mode, batch index (for filenames)
         save_npy: Whether to save numpy outputs
         plot: Whether to generate plots
-        nms_kwargs: NMS keyword arguments for detection mode
+        **kwarg_groups: Additional arguments for NMS (group1), SNR calculation (group2) and dedrift peak (group3) (if applicable)
     """
     assert mode in ('mask', 'detection'), f"Unsupported mode: {mode}"
 
@@ -272,7 +309,7 @@ def pred(model: torch.nn.Module,
 
             # Process single batch
             results = _process_batch_core(model, data, device, mode)
-            _save_batch_results(results, idx, save_dir, model.__class__.__name__, mode, save_npy, plot, **nms_kwargs)
+            _save_batch_results(results, idx, save_dir, model.__class__.__name__, mode, save_npy, plot, **kwarg_groups)
 
         else:  # Dataloader processing mode
             if max_steps is None:
@@ -285,4 +322,4 @@ def pred(model: torch.nn.Module,
 
                 results = _process_batch_core(model, batch, device, mode)
                 _save_batch_results(results, batch_idx, save_dir, model.__class__.__name__, mode, save_npy, plot,
-                                    **nms_kwargs)
+                                    **kwarg_groups)

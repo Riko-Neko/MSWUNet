@@ -119,7 +119,6 @@ def inference_and_plot(model, dataloader, device, save_dir, steps=10, conf_thres
             freq_info_list = decode_F_yolo(preds, model.S, model.B, conf_thresh=conf_thresh,
                                            iou_threshold=iou_threshold)
 
-
             img_np = images[0].detach().cpu().squeeze().numpy()
 
             fig, ax = plt.subplots(figsize=(15, 3))
@@ -140,6 +139,7 @@ def inference_and_plot(model, dataloader, device, save_dir, steps=10, conf_thres
             plt.close(fig)
 
             print(f"[\033[32mInfo\033[0m] Saved inference plot to {out_path}")
+
 
 # ----- main CLI -----
 def main(argv=None):
@@ -186,7 +186,7 @@ def main(argv=None):
     val_loader = DataLoader(valid_dataset, batch_size=batch_size, pin_memory=True)
 
     # model + loss
-    model = TinyYOLO(num_classes=2, S=31, B=3,base_channels=64).to(device)
+    model = TinyYOLO(num_classes=2, S=31, B=3, base_channels=64).to(device)
     summary(model, input_size=(1, 1, tchans, fchans))
 
     loss_fn = YOLOv1Loss(S=model.S, B=model.B, C=model.C, lambda_coord=5.0, lambda_noobj=0.05).to(device)

@@ -10,6 +10,8 @@ from torch.utils.data import Dataset
 from gen.SETIgen import sim_dynamic_spec_seti
 from utils.det_utils import plot_F_lines
 
+DEBUG = False
+
 
 class DynamicSpectrumDataset(Dataset):
     def __init__(self, mode='test', tchans=224, fchans=224, df=1.0, dt=1.0, fch1=None, ascending=True, drift_min=-2.0,
@@ -72,7 +74,6 @@ class DynamicSpectrumDataset(Dataset):
         self.total_time = self.tchans * self.dt
         self.t_center = torch.tensor((self.tchans - 1) / 2 / (self.tchans - 1))
         self.t_width = torch.tensor((self.tchans - 1) / (self.tchans - 1))
-        self.DEBUG = False
 
     def __len__(self):
         return 10 ** 9  # 虚拟一个很大的长度
@@ -211,7 +212,7 @@ class DynamicSpectrumDataset(Dataset):
         else:
             signal_spec, clean_spec, noisy_spec, rfi_mask, freq_info = sim_dynamic_spec_seti(**args)
 
-        if self.DEBUG:
+        if DEBUG:
             print(f"[\033[36mDebug\033[0m] Ground truth boxes to generate: {freq_info}, "
                   f"normalized ({np.array(freq_info[2]) / self.fchans}, {np.array(freq_info[3]) / self.fchans})")
 
@@ -262,7 +263,7 @@ class DynamicSpectrumDataset(Dataset):
                 gt_boxes[:N, 2] = self.t_center
                 gt_boxes[:N, 3] = torch.clamp(f_width, 0.0, 1.0)
                 gt_boxes[:N, 4] = torch.clamp(self.t_width, 0.0, 1.0)
-                if self.DEBUG:
+                if DEBUG:
                     print(
                         f"[\033[36mDebug\033[0m] Generated {N} boxes, format [class_id, x_center, y_center, width, height]:\n{gt_boxes}")
             return noisy_spec, clean_spec, gt_boxes

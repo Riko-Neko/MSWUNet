@@ -18,8 +18,8 @@ from utils.det_utils import decode_F, plot_F_lines
 
 class SETIWaterfallRenderer(QWidget):
     def __init__(self, dataset, model, device, mode='detection', log_dir=Path("./pipeline/log"), verbose=False,
-                 parent=None, drift=[-4.0, 4.0], snr_threshold=5.0, min_abs_drift=0.05, iou_thresh=0.5,
-                 score_thresh=0.5, top_k=10):
+                 parent=None, drift=[-4.0, 4.0], snr_threshold=5.0, pad_fraction=0.2, min_abs_drift=0.05,
+                 iou_thresh=0.5, score_thresh=0.5, top_k=10, fsnr_threshold=300, top_fraction=0.002, min_pixels=50):
         """
         Initialize the SETI waterfall renderer with dataset and model
 
@@ -32,6 +32,7 @@ class SETIWaterfallRenderer(QWidget):
             verbose: Whether to use simple console output
             drift: Drift rate range for mask mode [min_drift, max_drift] in Hz/s
             snr_threshold: SNR threshold for mask mode hits detection
+            pad_fraction: Fraction of extents to pad the events in detection
             min_abs_drift: Minimum absolute drift rate for mask mode
             iou_thresh: IoU threshold for detection mode NMS
             score_thresh: Confidence threshold for detection mode NMS
@@ -45,13 +46,16 @@ class SETIWaterfallRenderer(QWidget):
         self.nms_iou_thresh = iou_thresh
         self.nms_score_thresh = score_thresh
         self.nms_top_k = top_k
+        self.fsnr_threshold = fsnr_threshold
+        self.top_fraction = top_fraction
+        self.min_pixels = min_pixels
 
         # Initialize processor with mode-specific parameters
         self.processor = SETIPipelineProcessor(
-            dataset, model, device, mode=mode, log_dir=log_dir, verbose=verbose,
-            drift=drift, snr_threshold=snr_threshold, min_abs_drift=min_abs_drift,
-            iou_thresh=iou_thresh, score_thresh=score_thresh, top_k=top_k
-        )
+            dataset, model, device, mode=mode, log_dir=log_dir, verbose=verbose, drift=drift,
+            snr_threshold=snr_threshold, pad_fraction=pad_fraction, min_abs_drift=min_abs_drift, iou_thresh=iou_thresh,
+            score_thresh=score_thresh, top_k=top_k, fsnr_threshold=fsnr_threshold, top_fraction=top_fraction,
+            min_pixels=min_pixels)
 
         self.dataset = self.processor.dataset
         self.model = self.processor.model
@@ -333,9 +337,9 @@ class SETIWaterfallRenderer(QWidget):
         - Additional hits info (text) shown in the sidebar
         """
         patch_data, freq_range, time_range_idx = self.dataset.get_patch(row, col)
+        raw_patch = patch_data
         freq_min, freq_max = freq_range  # MHz
-        time_start, time_end = (time_range_idx[0] * self.tsamp,
-                                time_range_idx[1] * self.tsamp)
+        time_start, time_end = (time_range_idx[0] * self.tsamp, time_range_idx[1] * self.tsamp)
         tchans = time_range_idx[1] - time_range_idx[0]
 
         patch_data = patch_data.to(self.device).unsqueeze(0)  # (1, 1, t, f)
@@ -379,7 +383,7 @@ class SETIWaterfallRenderer(QWidget):
         cbar1.set_label("Intensity", fontsize=label_font)
 
         # Load hits info and draw detected signals
-        df_hits = self.load_additional_info(row, col, denoised_np, raw_preds)
+        df_hits = self.load_additional_info(row, col, denoised_np, raw_preds, raw_patch=raw_patch)
 
         if self.mode == 'mask' and not df_hits.empty:
             # Mask mode: draw Hough transform lines
@@ -438,7 +442,7 @@ class SETIWaterfallRenderer(QWidget):
             if self.mode == 'mask':
                 columns = ['DriftRate', 'SNR', 'Uncorrected_Frequency', 'freq_start', 'freq_end']
             else:
-                columns = ['DriftRate', 'confidence', 'Uncorrected_Frequency', 'freq_start', 'freq_end']
+                columns = ['DriftRate', 'SNR', 'confidence', 'Uncorrected_Frequency', 'freq_start', 'freq_end']
 
             # Filter columns to only include those present in the DataFrame
             available_columns = [col for col in columns if col in df_hits.columns]
@@ -457,7 +461,7 @@ class SETIWaterfallRenderer(QWidget):
                     self.hits_table.setItem(i, j, QTableWidgetItem(formatted_value))
             self.hits_table.resizeColumnsToContents()
 
-    def load_additional_info(self, row, col, denoised_np, raw_preds=None):
+    def load_additional_info(self, row, col, denoised_np, raw_preds=None, raw_patch=None):
         """
         Load additional information about the cell
 
@@ -466,11 +470,19 @@ class SETIWaterfallRenderer(QWidget):
             col (int): Column index
             denoised_np (np.ndarray): Denoised patch data
             raw_preds: Raw predictions for detection mode
+            raw_patch: Raw patch data for slicing
 
         Returns:
             DataFrame: Hits information
         """
-        if self.mode == 'mask':
+        if self.mode == 'detection':
+            # Process detection predictions to generate hits
+            freq_range = self.freq_ranges[row][col]
+            time_range = self.time_ranges[row][col]
+            time_duration = time_range[1] - time_range[0]
+            df_hits = self.processor._process_detection_hits(raw_preds, freq_range, time_range, events_patch=raw_patch)
+
+        else:  # mask mode
             # Execute hits detection on denoised data using Hough transform
             df_hits = execute_hits_hough(
                 patch=denoised_np,
@@ -482,14 +494,6 @@ class SETIWaterfallRenderer(QWidget):
                 min_abs_drift=self.min_abs_drift,
                 merge_tol=10000
             )
-        else:  # detection mode
-            # Process detection predictions to generate hits
-            freq_range = self.freq_ranges[row][col]
-            time_range = self.time_ranges[row][col]
-            time_duration = time_range[1] - time_range[0]
-
-            df_hits = self.processor._process_detection_hits(raw_preds, freq_range, time_range)
-
         return df_hits
 
 
