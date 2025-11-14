@@ -80,13 +80,13 @@ P = 2
 # NMS config
 nms_kargs = dict(
     iou_thresh=0.5,
-    score_thresh=0.3)
+    score_thresh=0.35)
 if pmode == 'yolo':
     nms_kargs['top_k'] = None
 
 # hits config
 drift = [-4.0, 4.0]  # work only for mask mode
-snr_threshold = 0
+snr_threshold = 5.0
 pad_fraction = 0.5
 fsnr_args = dict(
     fsnr_threshold=300,
