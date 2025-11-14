@@ -19,7 +19,7 @@ from gen.FRIgen import add_rfi
 
 def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, signals=None, noise_x_mean=0.0,
                           noise_x_std=1.0, mode='test', noise_type='normal', rfi_params=None, seed=None, plot=False,
-                          plot_filename=None, waterfall_itr=None):
+                          plot_filename=None, rfi_enhance=False, waterfall_itr=None):
     """
         使用 SetiGen 库合成动态频谱并注入射频干扰（RFI）。
 
@@ -261,6 +261,11 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
             drift_rate = np.random.uniform(-0.0001, 0.0001) * u.Hz / u.s
             path = stg.constant_path(f_start=f_start, drift_rate=drift_rate)
             rlevel = rfi_params.get('LowDrift_amp_factor', 1.0) * (level if level else 1.0)
+            if rfi_enhance:
+                rlevel = rlevel * np.random.uniform(1, 5)
+            # 默认 constant 调制
+            if np.random.rand() < 0.5 and rfi_enhance:
+                rlevel = rlevel * np.random.uniform(1, 5)
             # 默认 constant 调制
             t_profile = stg.constant_t_profile(level=rlevel)
             # 以 0.3 概率应用时间调制
@@ -278,8 +283,10 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
                                                                 amplitude=p_amplitude, level=rlevel,
                                                                 min_level=min_level)
             # 频率与带宽 profile
-            width = rfi_params.get('LowDrift_width', 2.0) * u.Hz
-            f_profile = stg.gaussian_f_profile(width=np.random.uniform(1, 3) * width)
+            width = rfi_params.get('LowDrift_width', 2.0) * u.Hz * np.random.uniform(1, 5)
+            if np.random.rand() < 0.5 and rfi_enhance:
+                width = width * np.random.uniform(1, 10)
+            f_profile = stg.gaussian_f_profile(width=width)
             bp_profile = stg.constant_bp_profile(1.0)
             added_signal = frame.add_signal(path, t_profile, f_profile, bp_profile)
             if mode == 'mask' or mode == 'test':

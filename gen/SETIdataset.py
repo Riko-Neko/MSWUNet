@@ -15,7 +15,7 @@ class DynamicSpectrumDataset(Dataset):
     def __init__(self, mode='test', tchans=224, fchans=224, df=1.0, dt=1.0, fch1=None, ascending=True, drift_min=-2.0,
                  drift_max=2.0, drift_min_abs=0.2, snr_min=10.0, snr_max=30.0, width_min=1.0, width_max=5.0,
                  num_signals=(0, 1), noise_std_min=0.05, noise_std_max=0.2, noise_mean_min=0.0, noise_mean_max=0.05,
-                 noise_type='normal', use_fil=False, background_fil=None):
+                 noise_type='normal', rfi_enhance=False, use_fil=False, background_fil=None):
         """
         动态生成式数据集构造函数，参数动态适应频率和时间通道数。
 
@@ -64,6 +64,7 @@ class DynamicSpectrumDataset(Dataset):
         self.noise_mean_min = noise_mean_min
         self.noise_mean_max = noise_mean_max
         self.noise_type = noise_type
+        self.rfi_enhance = rfi_enhance
         self.waterfall_itr = None if not use_fil else split_waterfall_generator(background_fil, fchans, tchans=tchans,
                                                                                 f_shift=[fchans, 8 * fchans])
         # 动态计算总带宽和总时间
@@ -79,8 +80,8 @@ class DynamicSpectrumDataset(Dataset):
     def __getitem__(self, idx):
         # 随机生成信号列表
         n_signals = random.randint(self.num_signals[0], self.num_signals[1])
-        if np.random.random() < 0.05:
-            n_signals += 1  # 1% 的概率增加一个SETI信号
+        if np.random.random() < 0.3:
+            n_signals += 1  # 30% 的概率增加一个SETI信号
 
         if np.random.random() < 0.1:  # 10% 的概率不生成任何信号
             n_signals = 0
@@ -127,7 +128,7 @@ class DynamicSpectrumDataset(Dataset):
                 'width': width,
                 'path': path_type,
                 't_profile': random.choices(
-                    ['pulse', 'sine', 'constant'], weights=[0.2, 0.4, 0.4], k=1)[0],
+                    ['pulse', 'sine', 'constant'], weights=[0., 0., 1.], k=1)[0],
                 'f_profile': random.choices(
                     ['gaussian', 'box', 'sinc', 'lorentzian', 'voigt'],
                     weights=[0.3, 0.2, 0.2, 0.15, 0.15],
@@ -197,7 +198,8 @@ class DynamicSpectrumDataset(Dataset):
                     rfi_params=rfi_params,
                     seed=None,
                     plot=False,
-                    waterfall_itr=self.waterfall_itr)
+                    waterfall_itr=self.waterfall_itr,
+                    rfi_enhance=self.rfi_enhance)
 
         # 生成动态频谱样本
         freq_info = None
@@ -486,6 +488,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    plot_samples(dataset, kind='clean', num=100, with_spectrum=True, spectrum_type='mean')
-    # plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
+    # plot_samples(dataset, kind='clean', num=100, with_spectrum=True, spectrum_type='mean')
+    plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
     # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)

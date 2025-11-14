@@ -24,7 +24,7 @@ def decode_F(out: Dict[str, torch.Tensor], iou_thresh: float = 0.5, score_thresh
         Other batches are cropped or padded to match M.
         Padded entries have confidence=0, class_id=-1, f_start=0, f_end=0.
     """
-    DEBUG = False
+    DEBUG = True
     f_start = torch.sigmoid(out["f_start"])
     f_end = torch.sigmoid(out["f_end"])
     confidence = torch.sigmoid(out["confidence"])

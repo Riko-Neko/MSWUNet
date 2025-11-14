@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from utils.det_utils import decode_F, plot_F_lines
+from utils.metrics_utils import SNR_filter
 
 
 def _process_batch_core(model, batch, device, mode):
@@ -126,6 +127,8 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
         denoised_spec = results["denoised"][0].cpu().squeeze().numpy()
         clean_spec = (results["clean"][0].cpu().squeeze().numpy()
                       if results["clean"] is not None else None)
+        SNR_est = SNR_filter(results["denoised"][0])
+        # print(f"[\033[36mDebug\033[0m] Estimated SNR={SNR_est:.2f}")
         freq_axis = np.arange(noisy_spec.shape[1])
         time_frames = noisy_spec.shape[0]
 
@@ -162,6 +165,8 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
             plot_spec(axs[2], rfi_mask_np if rfi_mask_np is not None else np.zeros_like(noisy_spec),
                       "Ground Truth RFI Mask", cmap='Reds')
             plot_spec(axs[3], denoised_spec, "Denoised Spectrum", cmap='viridis')
+            axs[3].text(0.98, 0.95, f"SNR={SNR_est:.2f}", transform=axs[3].transAxes, ha='right', va='top', fontsize=12,
+                        bbox=dict(facecolor='white', alpha=0.7))
             plot_spec(axs[4], pred_mask_np if pred_mask_np is not None else np.zeros_like(noisy_spec),
                       "Predicted RFI Mask", cmap='Reds')
 
@@ -210,6 +215,8 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
             plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis', boxes=gt_boxes_tuple, normalized=True)
             plot_spec(axs[2], denoised_spec, "Denoised Spectrum", cmap='viridis', normalized=True,
                       boxes=pred_boxes_tuple)
+            axs[2].text(0.98, 0.95, f"SNR={SNR_est:.2f}", transform=axs[2].transAxes, ha='right', va='top', fontsize=12,
+                        bbox=dict(facecolor='white', alpha=0.7))
 
             axs[-1].set_xlabel("Frequency Channel")
             plt.tight_layout()

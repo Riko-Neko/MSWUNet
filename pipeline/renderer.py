@@ -11,7 +11,7 @@ from PyQt5.QtGui import QColor, QPainter, QImage, QPixmap, QFont
 from PyQt5.QtWidgets import (QWidget, QToolTip, QLabel,
                              QVBoxLayout, QHBoxLayout, QPushButton, QScrollArea, QTableWidget, QTableWidgetItem)
 
-from pipeline.metrics import execute_hits_hough
+from utils.metrics_utils import execute_hits_hough
 from pipeline.pipeline_processor import SETIPipelineProcessor
 from utils.det_utils import decode_F, plot_F_lines
 

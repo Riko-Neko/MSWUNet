@@ -55,18 +55,19 @@ ascending = True
 drift_min = -4.0
 drift_max = 4.0
 drift_min_abs = df // (tchans * dt)
-snr_min = 15.0
-snr_max = 25.0
+snr_min = 20.0
+snr_max = 30.0
 width_min = 10
 width_max = 30
-num_signals = (0, 2)
+num_signals = (0, 1)
 noise_std_min = 0.025
 noise_std_max = 0.05
 noise_mean_min = 2
 noise_mean_max = 3
 nosie_type = "chi2"
+rfi_enhance = True
 use_fil = True
-fil_folder = Path('./data/33exoplanets/bg')
+fil_folder = Path('./data/33exoplanets/col')
 background_fil = list(fil_folder.rglob("*.fil"))
 
 # Training config
@@ -77,8 +78,12 @@ steps_per_epoch = 200
 valid_interval = 1
 valid_steps = 50
 log_interval = 50
+lr = 0.001
+weight_decay = 1.e-9
+T_max = 30
+eta_min = 1.0e-15
 force_save_best = True
-freeze_backbone = True
+freeze_backbone = False
 force_reconstruct = False
 mismatch_load = True
 
@@ -113,8 +118,7 @@ regress_loss_args = dict(
         w_loc=1.5,
         w_class=0.1,
         w_conf=0.5,
-        eps=1e-8)
-)
+        eps=1e-8))
 
 mask_loss_args = dict(
     alpha=1.0,
@@ -156,7 +160,8 @@ def main():
                                            width_min=width_min, width_max=width_max, num_signals=num_signals,
                                            noise_std_min=noise_std_min, noise_std_max=noise_std_max,
                                            noise_mean_min=noise_mean_min, noise_mean_max=noise_mean_max,
-                                           noise_type=nosie_type, use_fil=use_fil, background_fil=background_fil)
+                                           noise_type=nosie_type, rfi_enhance=rfi_enhance, use_fil=use_fil,
+                                           background_fil=background_fil)
 
     valid_dataset = DynamicSpectrumDataset(mode=mode, tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=fch1,
                                            ascending=ascending, drift_min=drift_min, drift_max=drift_max,
@@ -164,7 +169,8 @@ def main():
                                            width_min=width_min, width_max=width_max, num_signals=num_signals,
                                            noise_std_min=noise_std_min, noise_std_max=noise_std_max,
                                            noise_mean_min=noise_mean_min, noise_mean_max=noise_mean_max,
-                                           noise_type=nosie_type, use_fil=use_fil, background_fil=background_fil)
+                                           noise_type=nosie_type, rfi_enhance=rfi_enhance, use_fil=use_fil,
+                                           background_fil=background_fil)
 
     # Create data loaders
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
@@ -262,30 +268,37 @@ def main():
                     mismatched = safe_load_state_dict(model, state_dict)
                 else:
                     raise
-
         start_epoch = checkpoint['epoch'] + 1  # Start from the next epoch
-
         # Load criterion state for mask mode
         if mode == 'mask':
             criterion.step = checkpoint['criterion_step']
             criterion.mse_moving_avg = checkpoint['mse_moving_avg']
-
         print(f"[\033[32mInfo\033[0m] Resumed at epoch {start_epoch}")
-
     else:
         print("[\033[32mInfo\033[0m] Starting training from scratch.")
 
+    # Freeze backbone if enabled
+    if freeze_backbone:
+        for name, param in model.named_parameters():
+            if not name.startswith('detector.'):
+                param.requires_grad = False
+        print("[\033[32mInfo\033[0m] Backbone frozen, training only detector head")
+
+    # Moving to device
+    model = model.to(device)
+    criterion = criterion.to(device)
+
     # initialize optimizer and scheduler
-    optimizer = optim.Adam(list(model.parameters()) + list(criterion.parameters()), lr=5e-3, weight_decay=1e-7)
+    optimizer = optim.Adam(list(model.parameters()) + list(criterion.parameters()), lr=lr, weight_decay=weight_decay)
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True,
     #                                                  min_lr=1e-9)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30, eta_min=1.0e-12)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=eta_min)
 
     if resume_from:
         if 'optimizer_state_dict' not in checkpoint:
             print("[\033[33mWarn\033[0m] No optimizer state in checkpoint, using fresh optimizer.")
         elif mismatched:
-            load_optimizer_selectively(optimizer, checkpoint['optimizer_state_dict'])
+            load_optimizer_selectively(optimizer, checkpoint['optimizer_state_dict'], device=device)
         else:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             print("[\033[32mInfo\033[0m] Optimizer state loaded.")
@@ -299,17 +312,6 @@ def main():
         if valid_epochs:
             best_log = min(valid_epochs, key=lambda x: x['valid_loss'])
             best_valid_loss = best_log['valid_loss']
-
-    # Freeze backbone if enabled
-    if freeze_backbone:
-        for name, param in model.named_parameters():
-            if not name.startswith('detector.'):
-                param.requires_grad = False
-        print("[\033[32mInfo\033[0m] Backbone frozen, training only detector head")
-
-    # Moving to device
-    model = model.to(device)
-    criterion = criterion.to(device)
 
     # Start training
     train_model(model=model, train_dataloader=train_dataloader, valid_dataloader=valid_dataloader, criterion=criterion,

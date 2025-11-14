@@ -1,13 +1,64 @@
+import math
 import os
 
 import networkx as nx
 import numpy as np
 import pandas as pd
+import torch
 from matplotlib import pyplot as plt
 from scipy.ndimage import maximum_filter
 from scipy.signal import find_peaks
 
 from gen.SETIdataset import DynamicSpectrumDataset
+
+
+def SNR_filter(tensor_2d: torch.Tensor, top_fraction: float = 0.002, min_pixels: int = 50, ) -> float:
+    """
+    Estimate the overall SNR from a 2D spectrogram.
+
+    Definition:
+      1. Estimate the background noise σ using the median of the entire image plus MAD:
+           median = median(x)
+           MAD    = median(|x - median|)
+           σ      ≈ 1.4826 * MAD
+      2. Take the top_fraction brightest pixels (at least min_pixels) and calculate their average mean_top.
+      3. Return SNR = (mean_top - median) / σ
+
+    Parameters:
+        tensor_2d: 2D Tensor, shape (T, F) or (1, T, F) / (C, T, F)
+        top_fraction: The proportion of the brightest pixels participating in the "signal average", e.g., 0.002 ≈ 0.2%
+        min_pixels: The minimum number of pixels to be involved in the calculation to avoid instability when the patch is too small or top_fraction is too low.
+
+    Returns:
+        Python float scalar SNR; returns 0.0 if noise estimation fails or if there is an anomaly in the data.
+    """
+    if tensor_2d.ndim == 3:
+        tensor_2d = tensor_2d.squeeze(0)
+    if tensor_2d.ndim != 2:
+        raise ValueError(f"[\033[31mError\033[0m] Expects 2D tensor, got shape {tuple(tensor_2d.shape)}")
+
+    x = tensor_2d.detach().float().cpu().view(-1)
+    if x.numel() < 4:
+        return 0.0
+
+    median = x.median()
+    mad = (x - median).abs().median()
+    sigma = mad * 1.4826
+
+    if sigma <= 0 or torch.isnan(sigma) or torch.isinf(sigma):
+        return 0.0
+
+    k = max(min_pixels, int(top_fraction * x.numel()))
+    k = min(k, x.numel())
+    top_vals, _ = torch.topk(x, k)
+
+    mean_top = top_vals.mean()
+    snr = (mean_top - median) / sigma
+    snr_val = float(snr.item())
+
+    if not math.isfinite(snr_val):
+        return 0.0
+    return snr_val
 
 
 def execute_hits(patch: np.ndarray, tsamp: float, foff: float, max_drift: float = 4.0, min_drift: float = 0.0,
@@ -356,7 +407,7 @@ if __name__ == "__main__":
                                      snr_min=50.0, snr_max=60.0, width_min=10, width_max=15, num_signals=(1, 1),
                                      noise_std_min=0.025, noise_std_max=0.05)
 
-    out_dir = "log/metrics_test"
+    out_dir = "../pipeline/log/metrics_test"
     os.makedirs(out_dir, exist_ok=True)
 
     num_samples = 10

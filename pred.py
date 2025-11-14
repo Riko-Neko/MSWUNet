@@ -42,6 +42,7 @@ noise_std_max = 0.05
 noise_mean_min = 2
 noise_mean_max = 3
 nosie_type = "chi2"
+rfi_enhance = False
 use_fil = True
 fil_folder = Path('./data/33exoplanets')
 background_fil = list(fil_folder.rglob("*.fil"))
@@ -49,11 +50,12 @@ background_fil = list(fil_folder.rglob("*.fil"))
 # Polarization config
 ignore_polarization = True
 stokes_mode = "I"
-# XX_dir = "/data/Raid0/obs_data/33exoplanets/xx/"
-# YY_dir = "/data/Raid0/obs_data/33exoplanets/yy/"
-XX_dir = "./data/33exoplanets/xx/"
-YY_dir = "./data/33exoplanets/yy/"
+XX_dir = "/data/Raid0/obs_data/33exoplanets/xx/"
+YY_dir = "/data/Raid0/obs_data/33exoplanets/yy/"
+# XX_dir = "./data/33exoplanets/xx/"
+# YY_dir = "./data/33exoplanets/yy/"
 Beam = [1, 10]
+# Beam = None
 
 # Observation data
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
@@ -68,8 +70,9 @@ obs_file_path = [XX_dir, YY_dir] if ignore_polarization else obs_file_path
 batch_size = 1  # ⚠️Fixed to 1 for now, cannot use batch_size > 1, which will break the data.
 num_workers = 0
 pred_dir = "./pred_results"
-pred_steps = 100
-dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model_t3.pth"
+pred_steps = 1000
+dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model_t3_smaller_hid.pth"
+# dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
 # dwtnet_ckpt = Path("./archived/weights/20250925_33e_det_realbk_none.pth")
 unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 P = 2
@@ -77,7 +80,7 @@ P = 2
 # NMS config
 nms_kargs = dict(
     iou_thresh=0.75,
-    score_thresh=0.45)
+    score_thresh=0.3)
 if pmode == 'yolo':
     nms_kargs['top_k'] = None
 
@@ -210,7 +213,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
             else:
                 matched, _ = match_polarization_files(
                     sorted([f for f in Path(obs_file_path[0]).iterdir() if f.suffix in [".fil", ".h5"]]) + sorted(
-                        [f for f in Path(obs_file_path[1]).iterdir() if f.suffix in [".fil", ".h5"]]))
+                        [f for f in Path(obs_file_path[1]).iterdir() if f.suffix in [".fil", ".h5"]]), M_list=Beam)
                 obs_file_1st = matched[0]
         else:
             if isinstance(obs_file_path, list):
@@ -233,7 +236,8 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                                               width_min=width_min, width_max=width_max, num_signals=num_signals,
                                               noise_std_min=noise_std_min, noise_std_max=noise_std_max,
                                               noise_mean_min=noise_mean_min, noise_mean_max=noise_mean_max,
-                                              noise_type=nosie_type, use_fil=use_fil, background_fil=background_fil)
+                                              noise_type=nosie_type, rfi_enhance=rfi_enhance, use_fil=use_fil,
+                                              background_fil=background_fil)
         pred_dataloader = DataLoader(pred_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
 
     if mode == "dbl":
@@ -297,7 +301,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                 print(f"[\033[31mError\033[0m] No .fil or .h5 files found in provided paths: {obs_file_path}")
                 sys.exit(1)
 
-            file_groups, unmatched = match_polarization_files(all_files)
+            file_groups, unmatched = match_polarization_files(all_files, M_list=Beam)
             if unmatched:
                 print(
                     f"[\033[33mWarning\033[0m] Unmatched files (not paired or no _pol* pattern): {', '.join(unmatched)}")

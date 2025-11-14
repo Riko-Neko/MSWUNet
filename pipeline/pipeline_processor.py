@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import torch
 
-from pipeline.metrics import execute_hits_hough
+from utils.metrics_utils import execute_hits_hough
 from utils.det_utils import decode_F
 
 
@@ -288,7 +288,7 @@ class SETIPipelineProcessor:
                 if self.mode == 'detection':
                     print(
                         f"[\033[36mHit\033[0m] Found signal {idx + 1}: "
-                        f"Class=\033[32m{hit_row['class_id']}\033[0m"
+                        f"Class=\033[32m{hit_row['class_id']}\033[0m, "
                         f"Confidence=\033[32m{hit_row['confidence']:.2f}\033[0m, "
                         f"DriftRate=\033[32m{hit_row['DriftRate']:.4f} Hz/s\033[0m, "
                         f"Freq=\033[32m{hit_row['Uncorrected_Frequency']:.6f}\033[0m Mhz, "

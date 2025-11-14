@@ -22,7 +22,7 @@ def safe_load_state_dict(model, state_dict):
     return mismatch
 
 
-def load_optimizer_selectively(optimizer, opt_state_dict):
+def load_optimizer_selectively(optimizer, opt_state_dict, device):
     """
     Selectively load optimizer state by parameter order instead of id(param),
     avoiding cross-session id mismatch.
@@ -43,19 +43,19 @@ def load_optimizer_selectively(optimizer, opt_state_dict):
             if ('exp_avg' in old_p_state and
                     isinstance(old_p_state['exp_avg'], torch.Tensor) and
                     old_p_state['exp_avg'].shape == p.shape):
-                new_entry = {k: (v.to(p.device) if torch.is_tensor(v) else v)
+                new_entry = {k: (v.to(device) if torch.is_tensor(v) else v)
                              for k, v in old_p_state.items()}
                 matched_count += 1
             else:
-                new_entry = {'step': torch.tensor(0., device=p.device), 'exp_avg': torch.zeros_like(p, device=p.device),
-                             'exp_avg_sq': torch.zeros_like(p, device=p.device)}
+                new_entry = {'step': torch.tensor(0., device=device), 'exp_avg': torch.zeros_like(p, device=device),
+                             'exp_avg_sq': torch.zeros_like(p, device=device)}
                 if amsgrad:
-                    new_entry['max_exp_avg_sq'] = torch.zeros_like(p, device=p.device)
+                    new_entry['max_exp_avg_sq'] = torch.zeros_like(p, device=device)
         else:
-            new_entry = {'step': torch.tensor(0., device=p.device), 'exp_avg': torch.zeros_like(p, device=p.device),
-                         'exp_avg_sq': torch.zeros_like(p, device=p.device)}
+            new_entry = {'step': torch.tensor(0., device=device), 'exp_avg': torch.zeros_like(p, device=device),
+                         'exp_avg_sq': torch.zeros_like(p, device=device)}
             if amsgrad:
-                new_entry['max_exp_avg_sq'] = torch.zeros_like(p, device=p.device)
+                new_entry['max_exp_avg_sq'] = torch.zeros_like(p, device=device)
 
         new_state[p] = new_entry
     optimizer.state = new_state
