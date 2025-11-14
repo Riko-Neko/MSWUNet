@@ -50,12 +50,12 @@ background_fil = list(fil_folder.rglob("*.fil"))
 # Polarization config
 ignore_polarization = True
 stokes_mode = "I"
-# XX_dir = "/data/Raid0/obs_data/33exoplanets/xx/"
-# YY_dir = "/data/Raid0/obs_data/33exoplanets/yy/"
-XX_dir = "./data/33exoplanets/xx/"
-YY_dir = "./data/33exoplanets/yy/"
-# Beam = [1, 10]
-Beam = None
+XX_dir = "/data/Raid0/obs_data/33exoplanets/xx/"
+YY_dir = "/data/Raid0/obs_data/33exoplanets/yy/"
+# XX_dir = "./data/33exoplanets/xx/"
+# YY_dir = "./data/33exoplanets/yy/"
+Beam = [1, 10]
+# Beam = None
 
 # Observation data
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
@@ -120,6 +120,10 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
     # Set random seeds
     torch.manual_seed(42)
     np.random.seed(42)
+    global batch_size
+    if batch_size != 1:
+        print(f"[\033[31mSevere Warn\033[0m] !!!! Batch size is fixed to 1 for now, cannot use batch_size > 1 !!!!")
+        batch_size = 1
 
     # Set device
     def check_device(dev):
