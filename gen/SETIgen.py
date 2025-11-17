@@ -235,7 +235,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
 
             # 计算起始和终止频率索引
             f_start = frame.get_index(path(frame.ts[0]))
-            f_stop = frame.get_index(path(frame.ts[tchans - 1]))
+            f_stop = np.clip(frame.get_index(path(frame.ts[tchans - 1])), 0, fchans - 1)
             f_starts.append(f_start)
             f_stops.append(f_stop)
 

@@ -102,8 +102,6 @@ class DynamicSpectrumDataset(Dataset):
             # 随机路径类型
             path_type = random.choices(['constant', 'sine', 'squared', 'rfi'],
                                        weights=[0.65, 0.1, 0.25, 0.])[0]
-            # 默认信号参数
-            margin = int(0.2 * self.fchans)
 
             def _truncated_normal(a, b, mean=0.0, std=1.2):
                 lower = (a - mean) / std
@@ -117,10 +115,18 @@ class DynamicSpectrumDataset(Dataset):
                 # !!⚠️ 较大的 drift rate 在轨迹为抛物线时可能出现类似直线但是无法标记为 candidate 的情况
                 if abs(drift_rate) >= self.drift_min_abs:
                     break
-            if drift_rate < 0:
-                f_index = self.fchans // 2 + np.random.randint(0, self.fchans // 2 - margin)
-            else:
-                f_index = self.fchans // 2 - np.random.randint(0, self.fchans // 2 - margin)
+
+            margin = int(0.025 * self.fchans)
+
+            # if drift_rate < 0:
+            #     f_index = self.fchans // 2 + np.random.randint(0, self.fchans // 2 - margin)
+            # else:
+            #     f_index = self.fchans // 2 - np.random.randint(0, self.fchans // 2 - margin)
+
+            f_min = margin if drift_rate < 0 else 0
+            f_max = self.fchans - 1 if drift_rate < 0 else self.fchans - margin
+
+            f_index = np.random.randint(f_min, f_max)
 
             # 随机信噪比和宽度
             snr = random.uniform(self.snr_min, self.snr_max)
@@ -496,6 +502,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    # plot_samples(dataset, kind='clean', num=100, with_spectrum=True, spectrum_type='mean')
+    plot_samples(dataset, kind='clean', num=50, with_spectrum=True, spectrum_type='mean')
     plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
     # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)
