@@ -56,7 +56,7 @@ drift_min = -4.0
 drift_max = 4.0
 drift_min_abs = df // (tchans * dt)
 snr_min = 25.0
-snr_max = 45.0
+snr_max = 40.0
 width_min = 7.5
 width_max = 20
 num_signals = (0, 1)
@@ -83,7 +83,7 @@ weight_decay = 1.e-9
 T_max = 30
 eta_min = 1.0e-15
 force_save_best = True
-freeze_backbone = False
+freeze_backbone = True
 force_reconstruct = False
 mismatch_load = True
 
@@ -109,7 +109,7 @@ dwtnet_args = dict(
 unet_args = dict()
 
 regress_loss_args = dict(
-    lambda_denoise=1.0,
+    lambda_denoise=0.,
     loss_type='mse',
     lambda_learnable=False,
     regression_loss_kwargs=dict(
