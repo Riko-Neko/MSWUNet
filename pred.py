@@ -50,10 +50,10 @@ background_fil = list(fil_folder.rglob("*.fil"))
 # Polarization config
 ignore_polarization = True
 stokes_mode = "I"
-XX_dir = "/data/Raid0/obs_data/33exoplanets/xx/"
-YY_dir = "/data/Raid0/obs_data/33exoplanets/yy/"
-# XX_dir = "./data/33exoplanets/xx/"
-# YY_dir = "./data/33exoplanets/yy/"
+# XX_dir = "/data/Raid0/obs_data/33exoplanets/xx/"
+# YY_dir = "/data/Raid0/obs_data/33exoplanets/yy/"
+XX_dir = "./data/33exoplanets/xx/"
+YY_dir = "./data/33exoplanets/yy/"
 Beam = [1, 10]
 # Beam = None
 
@@ -61,8 +61,8 @@ Beam = [1, 10]
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil"
-# obs_file_path = "data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil"
-obs_file_path = "./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil"
+obs_file_path = "data/33exoplanets/yy/Kepler-438_M01_pol2_f1139.58-1142.31.fil"
+# obs_file_path = "./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil"
 # obs_file_path = './data/33exoplanets/'
 obs_file_path = [XX_dir, YY_dir] if ignore_polarization else obs_file_path
 

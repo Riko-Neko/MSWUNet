@@ -41,7 +41,7 @@ def main():
 
     print_info(wf)
     try:
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(12, 6))
         wf.plot_waterfall(f_start=f_start, f_stop=f_stop)
         plt.show()
     except Exception as e:
@@ -60,6 +60,7 @@ python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1120
 python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil 1125.0154 1125.017
 python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil 1125.019 1125.023
 python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil 1140.6035 1140.6045
+python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1139.58-1142.31.fil 1140.6036 1140.6044
 
 HD-180617_M04 xx:
 python FILTERBANK_checker.py /media/rikoneko/4c8904cd-457e-43a8-81d8-e3f5c0e60128/xx/HD-180617_M04_pol1.fil 1404.0496 1404.0504

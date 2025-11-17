@@ -13,7 +13,7 @@ from utils.metrics_utils import SNR_filter
 DEBUG = True
 
 
-def _process_batch_core(model, batch, device, mode):
+def _process_batch_core(model, batch, device, mode, *args):
     """
     Core processing function: Handles input batch and returns model outputs
 
@@ -22,6 +22,7 @@ def _process_batch_core(model, batch, device, mode):
         batch: Input data batch (can be tuple/list or single tensor)
         device: Device to run computation on (e.g., 'cuda' or 'cpu')
         mode: 'mask' or 'detection'
+        args: Waterfall data index information (if available)
 
     Returns:
         Dictionary containing:
@@ -37,16 +38,20 @@ def _process_batch_core(model, batch, device, mode):
     clean = None
     rfi_mask = None
     gt_boxes = None
+    f_min, f_max, start_t, end_t = None, None, None, None
     if isinstance(batch, (list, tuple)):
         inputs = batch[0].to(device)
 
         if mode == 'detection':
             if len(batch) > 1 and isinstance(batch[1], torch.Tensor):
                 clean = batch[1].to(device)
+            elif isinstance(batch[1], list):
+                f_min, f_max, start_t, end_t = args
+                if DEBUG:
+                    print(
+                        f"[\033[36mDebug\033[0m] Extracting: f_min={f_min}, f_max={f_max}")
             if len(batch) > 2 and isinstance(batch[2], torch.Tensor):
                 gt_boxes = batch[2].to(device)
-            if len(batch) > 3 and isinstance(batch[3], list):
-                mean, std = batch[-1]
 
         else:  # 'mask' as default
             if len(batch) > 1 and isinstance(batch[1], torch.Tensor):
@@ -84,7 +89,9 @@ def _process_batch_core(model, batch, device, mode):
         "pred_mask": pred_mask,
         "logits": logits,
         "gt_boxes": gt_boxes,
-        "raw_preds": raw_preds
+        "raw_preds": raw_preds,
+        "f_info": (f_min, f_max),
+        "t_info": (start_t, end_t)
     }
 
 
@@ -133,9 +140,14 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
         if DEBUG:
             print(f"[\033[36mDebug\033[0m] Estimated SNR={SNR_est:.2f}")
         freq_frames = noisy_spec.shape[1]
-        freq_axis = np.arange(freq_frames)
-        time_frames = noisy_spec.shape[0]
-        time_duration = time_frames * kwarg_groups["group_dedrift"]["dt_s"]
+        time_frames = denoised_spec.shape[0]
+        f_min, f_max = results["f_info"]
+        t_start, t_end = results["t_info"]
+        dt = kwarg_groups["group_dedrift"]["dt_s"]
+        freq_axis = np.arange(f_min, f_max, (f_max - f_min) / freq_frames) if f_min is not None else np.arange(
+            freq_frames)
+        time_axis = dt * np.arange(t_start, t_end) if t_start is not None else np.arange(time_frames)
+        time_duration = time_frames * dt
         freq_duration = freq_frames * kwarg_groups["group_dedrift"]["df_hz"]
 
         if mode == 'mask':
@@ -180,45 +192,26 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
             plt.tight_layout()
 
         elif mode == 'detection':
-            # Process predictions
-            pred_boxes_tuple = None
-            if results["raw_preds"] is not None:
-                det_outs = decode_F(results["raw_preds"], **kwarg_groups["group_nms"])  # dict
-                f_starts = det_outs["f_start"][0].cpu().numpy()
-                f_stops = det_outs["f_end"][0].cpu().numpy()
-                N_pred = det_outs["confidence"].shape[1]
-                classes = det_outs["class"][0].cpu().numpy()
-                pred_boxes_tuple = (N_pred, classes, f_starts, f_stops)
-
-            # Process ground truth boxes
-            gt_boxes_tuple = None
-            snr_vals = []
-            drift_rates = []
-            if results["gt_boxes"] is not None:
-                events_patch = results["inputs"][0]
-                gt_boxes = results["gt_boxes"][0].cpu().numpy()  # Assuming (N_gt, 2) or similar, [start, stop]
-                gt_starts = gt_boxes[:, 0]
-                gt_stops = gt_boxes[:, 1]
-                gt_classes = gt_boxes[:, 2]
-                N_gt = len(gt_starts)
-                gt_boxes_tuple = (N_gt, gt_classes, gt_starts, gt_stops)
-                # calculate hits SNR
-                patch_to_slice = None
-                for i, (f_start_norm, f_stop_norm) in enumerate(zip(gt_starts, gt_stops)):
-                    if gt_starts[i] != gt_starts[i]:  # nan != nan
+            def _get_snrs(event, fraction, starts, stops):
+                """Helper function to get SNRs for boxes"""
+                to_slice = None
+                snr_vals = []
+                drift_rates = []
+                for i, (f_start, f_stop) in enumerate(zip(starts, stops)):
+                    if starts[i] != starts[i]:  # nan != nan
                         continue
                     snr_val = 0.0
-                    freq_change_hz = (f_stop_norm - f_start_norm) * freq_duration
+                    freq_change_hz = (f_stop - f_start) * freq_duration
                     drift_rate = float(freq_change_hz / time_duration) if time_duration > 0 else 0.0
-                    if events_patch.ndim == 3:
-                        patch_to_slice = events_patch[0]
-                    if patch_to_slice.ndim != 2:
+                    if event.ndim == 3:
+                        to_slice = event[0]
+                    if to_slice.ndim != 2:
                         raise ValueError(
-                            f"[\033[31mError\033[0m] input_patch must be 2D after squeeze, got {tuple(patch_to_slice.shape)}")
-                    if patch_to_slice is not None:
+                            f"[\033[31mError\033[0m] input_patch must be 2D after squeeze, got {tuple(to_slice.shape)}")
+                    if to_slice is not None:
                         try:
-                            roi, f_start_pad, f_stop_pad, _, _ = extract_F_slice(events_patch, f_start_norm,
-                                                                                 f_stop_norm, pad_fraction=pad_fraction)
+                            roi, f_start_pad, f_stop_pad, _, _ = extract_F_slice(event, f_start, f_stop,
+                                                                                 pad_fraction=fraction)
                             snr_val = SNR_filter(roi, mode="dedrift_peak", drift_hz_per_s=drift_rate,
                                                  **kwarg_groups["group_dedrift"])
                         except Exception as e:
@@ -229,15 +222,41 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
                         drift_rates.append(drift_rate)
                 if DEBUG:
                     print(f"[\033[36mDebug\033[0m] SNR: {snr_vals}, drift_rate: {drift_rates}")
+                return snr_vals, drift_rates
+
+            # Process predictions
+            pred_boxes_tuple = None
+            snr_vals, drift_rates = None, None
+            events_patch = results["inputs"][0]
+            if results["raw_preds"] is not None:
+                det_outs = decode_F(results["raw_preds"], **kwarg_groups["group_nms"])  # dict
+                f_starts = det_outs["f_start"][0].cpu().numpy()
+                f_stops = det_outs["f_end"][0].cpu().numpy()
+                N_pred = det_outs["confidence"].shape[1]
+                classes = det_outs["class"][0].cpu().numpy()
+                pred_boxes_tuple = (N_pred, classes, f_starts, f_stops)
+                if results["gt_boxes"] is None:
+                    snr_vals, drift_rates = _get_snrs(events_patch, pad_fraction, f_starts, f_stops)
+
+            # Process ground truth boxes
+            gt_boxes_tuple = None
+            if results["gt_boxes"] is not None:
+                gt_boxes = results["gt_boxes"][0].cpu().numpy()  # Assuming (N_gt, 2) or similar, [start, stop]
+                gt_starts = gt_boxes[:, 0]
+                gt_stops = gt_boxes[:, 1]
+                gt_classes = gt_boxes[:, 2]
+                N_gt = len(gt_starts)
+                gt_boxes_tuple = (N_gt, gt_classes, gt_starts, gt_stops)
+                snr_vals, drift_rates = _get_snrs(events_patch, pad_fraction, gt_starts, gt_stops)
 
             # Create figure with subplots
-            fig, axs = plt.subplots(3, 1, figsize=(14, 21))
+            fig, axs = plt.subplots(3, 1, figsize=(15, 9))
 
             def plot_spec(ax, data, title, cmap='viridis', boxes=None, normalized=False, snrs=None,
                           color=['red', 'green'], linestyle='--', linewidth=2):
                 """Helper function to plot spectrum data with optional boxes"""
                 im = ax.imshow(data, aspect='auto', origin='lower',
-                               extent=[freq_axis[0], freq_axis[-1], 0, time_frames], cmap=cmap)
+                               extent=[freq_axis[0], freq_axis[-1], time_axis[0], time_axis[-1]], cmap=cmap)
                 ax.set_title(title)
                 ax.set_ylabel("Time Frame")
                 fig.colorbar(im, ax=ax, label="Intensity")
@@ -248,7 +267,8 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
             # Plot all components
             plot_spec(axs[0], clean_spec if clean_spec is not None else np.zeros_like(noisy_spec),
                       "Clean Spectrum")
-            plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis', boxes=gt_boxes_tuple,
+            plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis',
+                      boxes=gt_boxes_tuple if gt_boxes_tuple is not None else pred_boxes_tuple,
                       normalized=True, snrs=snr_vals)
             plot_spec(axs[2], denoised_spec, "Denoised Spectrum", cmap='viridis', boxes=pred_boxes_tuple,
                       normalized=True)
@@ -317,9 +337,22 @@ def pred(model: torch.nn.Module,
 
             # Process entire dataloader
             for batch_idx, batch in enumerate(data):
+                f_min, f_max, start_t, end_t = None, None, None, None
                 if batch_idx >= max_steps:
                     break
+                if isinstance(batch[1], list):
+                    freqs = data.dataset.freqs
+                    patch_t = data.dataset.patch_t
+                    patch_f = data.dataset.patch_f
+                    start_t = batch[1][0]
+                    start_f = batch[1][1]
+                    end_t = start_t + patch_t
+                    end_f = start_f + patch_f
+                    if freqs[0] < freqs[-1]:
+                        f_min, f_max = freqs[start_f], freqs[end_f - 1]
+                    else:
+                        f_min, f_max = freqs[end_f - 1], freqs[start_f]
 
-                results = _process_batch_core(model, batch, device, mode)
+                results = _process_batch_core(model, batch, device, mode, f_min, f_max, start_t, end_t)
                 _save_batch_results(results, batch_idx, save_dir, model.__class__.__name__, mode, save_npy, plot,
                                     **kwarg_groups)

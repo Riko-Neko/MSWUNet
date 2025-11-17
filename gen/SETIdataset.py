@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from blimpy import Waterfall
 from matplotlib import pyplot as plt
+from scipy.stats import truncnorm
 from torch.utils.data import Dataset
 
 from gen.SETIgen import sim_dynamic_spec_seti
@@ -100,14 +101,18 @@ class DynamicSpectrumDataset(Dataset):
         for i in range(n_signals):
             # 随机路径类型
             path_type = random.choices(['constant', 'sine', 'squared', 'rfi'],
-                                       weights=[0.5, 0.2, 0.3, 0.])[0]
+                                       weights=[0.6, 0.25, 0.35, 0.])[0]
             # 默认信号参数
             margin = int(0.2 * self.fchans)
-            # 随机漂移率，确保绝对值不低于 drift_min_abs
+
+            def _truncated_normal(a, b, mean=0.0, std=1.2):
+                lower = (a - mean) / std
+                upper = (b - mean) / std
+                return truncnorm.rvs(lower, upper, loc=mean, scale=std)
+
             while True:
-                # drift_rate = random.uniform(self.drift_min, self.drift_max)
-                # 使用 Beta 分布采样，α=β=6 => 两端概率极低
-                x = random.betavariate(6, 6)
+                # ✔ 使用截断正态分布：中心概率最高，两端概率极低，靠近两端也不会显著升高
+                x = _truncated_normal(0.0, 1.0, mean=0.5, std=0.05)
                 drift_rate = self.drift_min + x * (self.drift_max - self.drift_min)
                 # !!⚠️ 较大的 drift rate 在轨迹为抛物线时可能出现类似直线但是无法标记为 candidate 的情况
                 if abs(drift_rate) >= self.drift_min_abs:
@@ -129,7 +134,7 @@ class DynamicSpectrumDataset(Dataset):
                 'width': width,
                 'path': path_type,
                 't_profile': random.choices(
-                    ['pulse', 'sine', 'constant'], weights=[0., 0., 1.], k=1)[0],
+                    ['pulse', 'sine', 'constant'], weights=[0.3, 0.2, 0.5], k=1)[0],
                 'f_profile': random.choices(
                     ['gaussian', 'box', 'sinc', 'lorentzian', 'voigt'],
                     weights=[0.3, 0.2, 0.2, 0.15, 0.15],
@@ -138,31 +143,33 @@ class DynamicSpectrumDataset(Dataset):
                 'rfi_type': random.choice(['stationary', 'random_walk']),
                 'spread_type': random.choice(['uniform', 'normal']),
                 'spread': random.choices(
-                    [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 7.5, 10.0, 15.0, 20.0, 25.0]),
-                # squared 相关参数
-                'squared_drift': drift_rate * 5.e-4
+                    [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 7.5, 10.0, 15.0, 20.0, 25.0])
             }
 
             # 路径类型特定参数
             if path_type == 'sine':
-                sig['period'] = random.uniform(1 * self.total_time, 10 * self.total_time)
-                sig['amplitude'] = random.uniform(-0.1 * self.total_bandwidth, 0.1 * self.total_bandwidth)
+                sig['period'] = random.uniform(1.25 * self.total_time, 2.5 * self.total_time)
+                sig['amplitude'] = random.uniform(0.01 * self.total_bandwidth,
+                                                  0.03 * self.total_bandwidth) * random.choice([1, -1])
+                sig['drift_rate'] = random.uniform(0.01, 0.25) * drift_rate
             elif path_type == 'rfi':
                 sig['spread'] = random.uniform(0.005 * self.total_bandwidth, 0.05 * self.total_bandwidth)
                 sig['spread_type'] = random.choice(['uniform', 'normal'])
                 sig['rfi_type'] = random.choice(['stationary', 'random_walk'])
             elif path_type == 'squared':
-                sig['drift_rate'] = random.uniform(0.1 * drift_rate / self.total_bandwidth,
-                                                   1 * drift_rate / self.total_bandwidth)
+                if abs(drift_rate) < 0.1:
+                    sig['path'] = 'constant'
+                else:
+                    sig['drift_rate'] = drift_rate * 5.e-4
 
             # 时间调制类型参数
             if sig['t_profile'] == 'pulse':
-                sig['p_width'] = random.uniform(0.1 * self.total_time, 100 * self.total_time)
+                sig['p_width'] = random.uniform(self.total_time, 100 * self.total_time)
                 sig['p_amplitude_factor'] = random.uniform(0.1, 1.0)
                 sig['p_num'] = random.randint(1, 5)
-                sig['p_min_level_factor'] = random.uniform(0.05, 1.0)
+                sig['p_min_level_factor'] = random.uniform(0.1, 1.0)
             elif sig['t_profile'] == 'sine':
-                sig['s_period'] = random.uniform(0.5 * self.total_time, 30 * self.total_time)
+                sig['s_period'] = random.uniform(0.1 * self.total_time, 1 * self.total_time)
                 sig['s_amplitude_factor'] = random.uniform(0.01, 1.0)
 
             signals.append(sig)
@@ -471,10 +478,10 @@ if __name__ == "__main__":
     drift_min_abs = df // (tchans * dt)
     dataset = DynamicSpectrumDataset(mode='test', tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=True,
                                      drift_min=drift_min, drift_max=drift_max, drift_min_abs=drift_min_abs,
-                                     snr_min=15.0, snr_max=25.0, width_min=10, width_max=30, num_signals=(1, 2),
+                                     snr_min=25.0, snr_max=45.0, width_min=7.5, width_max=30, num_signals=(1, 1),
                                      noise_std_min=0.025, noise_std_max=0.05, noise_mean_min=2, noise_mean_max=3,
                                      noise_type='chi2', use_fil=True,
-                                     background_fil="../data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil")
+                                     background_fil="../data/33exoplanets/yy/Kepler-438_M01_pol2_f1139.58-1142.31.fil")
 
     """
     参数生成 Refs:
@@ -489,6 +496,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    # plot_samples(dataset, kind='clean', num=100, with_spectrum=True, spectrum_type='mean')
-    plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
+    plot_samples(dataset, kind='clean', num=100, with_spectrum=True, spectrum_type='mean')
+    # plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
     # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)

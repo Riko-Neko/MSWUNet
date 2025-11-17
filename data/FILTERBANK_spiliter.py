@@ -124,6 +124,10 @@ if __name__ == "__main__":
     
     fname = './BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil'
     
+    # Kepler-438_M01:
+    python FILTERBANK_spiliter.py --f_start 1139.5800449 --f_stop 1142.3103847 --output_dir ./33exoplanets/ /data/Raid0/obs_data/33exoplanets/yy/Kepler-438_M01_pol2.fil
+    python FILTERBANK_spiliter.py --f_start 1139.5800449 --f_stop 1142.3103847 --output_dir ./33exoplanets/ /data/Raid0/obs_data/33exoplanets/xx/Kepler-438_M01_pol1.fil
+    
     for many files in linux:
 
 for f in /data/Raid0/obs_data/33exoplanets/*/*M{08,10,12,14,16,18}*; do
