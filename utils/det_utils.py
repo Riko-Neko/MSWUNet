@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-DEBUG = False
+DEBUG = True
 
 
 def decode_F(out: Dict[str, torch.Tensor], iou_thresh: float = 0.5, score_thresh: float = 0.2,

@@ -187,7 +187,8 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
                 path = stg.sine_path(f_start=f_start, drift_rate=drift, period=period, amplitude=amplitude)
             elif path_type == 'squared':
                 path = stg.squared_path(f_start=f_start, drift_rate=drift)
-                low_squared_drift = True if abs(drift.value) < 1.e-4 else False
+                # low_squared_drift = True if abs(drift.value) < 1.e-4 else False
+                low_squared_drift = True if abs(drift.value) < 7.5e-5 else False
             elif path_type == 'rfi':
                 spread = sig.get('spread', 0.0) * u.Hz
                 spread_type = sig.get('spread_type', 'uniform')

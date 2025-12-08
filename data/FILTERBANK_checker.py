@@ -59,12 +59,16 @@ python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1120
 python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil 1130.4087 1130.430
 python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil 1125.0154 1125.017
 python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil 1125.019 1125.023
-python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1120.00-1150.00.fil 1140.6035 1140.6045
-python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1139.58-1142.31.fil 1140.6036 1140.6044
+python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1139.58-1142.31.fil 1140.60016 1140.60784
+python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1139.58-1142.31.fil 1140.60352 1140.60448
 
 HD-180617_M04 xx:
 python FILTERBANK_checker.py /media/rikoneko/4c8904cd-457e-43a8-81d8-e3f5c0e60128/xx/HD-180617_M04_pol1.fil 1404.0496 1404.0504
-python data/FILTERBANK_checker.py ./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil 1404.0496 1404.0573
+python data/FILTERBANK_checker.py ./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil 1404.04975 1404.05025
+python data/FILTERBANK_checker.py ./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil 1404.04952 1404.05048
+python data/FILTERBANK_checker.py ./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil 1404.04904 1404.05096
+python data/FILTERBANK_checker.py ./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil 1404.04808 1404.05192
+python data/FILTERBANK_checker.py ./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil 1404.04616 1404.05384
 python data/FILTERBANK_checker.py ./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil 1406.9505 1406.9515
 python data/FILTERBANK_checker.py ./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil 1403.866 1403.867
 

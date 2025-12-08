@@ -67,19 +67,20 @@ obs_file_path = "data/33exoplanets/yy/Kepler-438_M01_pol2_f1139.58-1142.31.fil"
 obs_file_path = [XX_dir, YY_dir] if ignore_polarization else obs_file_path
 
 # Prediction config
+RAW = True
 batch_size = 1  # ⚠️Fixed to 1 for now, cannot use batch_size > 1, which will break the data.
 num_workers = 0
 pred_dir = "./pred_results"
 pred_steps = 1000
-dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model_t3_smaller_hid.pth"
-# dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
+# dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model_t3_smaller_hid_f64_n5_locateerror.pth"
+dwtnet_ckpt = Path("./checkpoints/dwtnet") / "best_model.pth"
 # dwtnet_ckpt = Path("./archived/weights/20250925_33e_det_realbk_none.pth")
 unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 P = 2
 
 # NMS config
 nms_kargs = dict(
-    iou_thresh=0.5,
+    iou_thresh=0.2,
     score_thresh=0.35)
 if pmode == 'yolo':
     nms_kargs['top_k'] = None
@@ -101,18 +102,20 @@ dedrift_args = dict(
 # Model config
 dim = 64
 levels = [2, 4, 8, 16]
-feat_channels = dim * ([1] + levels)[0]
+feat_channels = 96 # 64
 dwtnet_args = dict(
     in_chans=1,
     dim=dim,
     levels=levels,
     wavelet_name='db4',
-    extension_mode='periodization',
+    extension_mode='periodization')
+detector_args = dict(
     fchans=fchans,
-    N=5,
+    N=10,
     num_classes=2,
     feat_channels=feat_channels,
-    dropout=0.05)
+    dropout=0.005)
+
 unet_args = dict()
 
 
@@ -259,7 +262,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
         pred_dir = Path(pred_dir) / "dbl"
         print("[\033[32mInfo\033[0m] Running dual-model comparison mode")
         # Load both models
-        dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
+        dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args, **detector_args)
         unet = load_model(UNet, unet_ckpt)
         # Process the same samples with both models
         for idx, batch in enumerate(pred_dataloader):
@@ -351,10 +354,12 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                                            ignore_polarization=ignore_polarization, stokes_mode=stokes_mode)
 
             # Load model
-            model = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
+            model = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args, **detector_args)
 
             if ui:
-                app = QApplication(sys.argv)
+                if RAW:
+                    print("[\033[33mWarn\033[0m] UI mode cannot be used with RAW output, using original config...")
+                    app = QApplication(sys.argv)
                 renderer = SETIWaterfallRenderer(dataset, model, device, mode=pmode, log_dir=f_log_dir, drift=drift,
                                                  snr_threshold=snr_threshold, min_abs_drift=drift_min_abs,
                                                  verbose=verbose, **nms_kargs, **fsnr_args)
@@ -367,10 +372,13 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
 
             else:
                 print("[\033[32mInfo\033[0m] Running in no-UI mode, logging only")
-                processor = SETIPipelineProcessor(dataset, model, device, mode=pmode, log_dir=f_log_dir, drift=drift,
-                                                  snr_threshold=snr_threshold, pad_fraction=pad_fraction,
-                                                  min_abs_drift=drift_min_abs, verbose=verbose, **nms_kargs,
-                                                  **fsnr_args)
+                if RAW:
+                    print(
+                        "[\033[33mWarn\033[0m] You are logging raw data, which may be extremely large. Make sure you have enough space.")
+                processor = SETIPipelineProcessor(dataset, model, device, mode=pmode, log_dir=f_log_dir,
+                                                  raw_output=RAW, drift=drift, snr_threshold=snr_threshold,
+                                                  pad_fraction=pad_fraction, min_abs_drift=drift_min_abs,
+                                                  verbose=verbose, **nms_kargs, **fsnr_args)
                 processor.process_all_patches()
 
     else:
@@ -379,7 +387,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
         # --- 推理 DWTNet ---
         if execute0:
             print("[\033[32mInfo\033[0m] Running DWTNet inference...")
-            dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args)
+            dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args, **detector_args)
             pred(dwtnet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
                  save_npy=False, plot=True, group_nms=nms_kargs, group_fsnr=fsnr_args, group_dedrift=dedrift_args)
         # --- 推理 UNet ---

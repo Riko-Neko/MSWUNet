@@ -67,6 +67,10 @@ class SETIWaterFullDataset(Dataset):
         self.tchans = self.obs.selection_shape[0]
         self.fchans = self.obs.selection_shape[2]
         self.freqs = self.obs.get_freqs()
+        if self.freqs[0] < self.freqs[-1]:
+            self.ascending = True
+        else:
+            self.ascending = False
 
         if not t_adaptive:
             assert patch_t <= self.tchans, "patch_t larger than available time channels."
@@ -102,7 +106,7 @@ class SETIWaterFullDataset(Dataset):
         end_f = start_f + self.patch_f
 
         # Determine frequency range
-        if self.freqs[0] < self.freqs[-1]:
+        if self.ascending:
             f_start, f_stop = self.freqs[start_f], self.freqs[end_f - 1]
         else:
             f_start, f_stop = self.freqs[end_f - 1], self.freqs[start_f]
@@ -147,7 +151,7 @@ class SETIWaterFullDataset(Dataset):
         end_t = start_t + self.patch_t
         end_f = start_f + self.patch_f
 
-        if self.freqs[0] < self.freqs[-1]:
+        if self.ascending:
             f_min, f_max = self.freqs[start_f], self.freqs[end_f - 1]
         else:
             f_min, f_max = self.freqs[end_f - 1], self.freqs[start_f]

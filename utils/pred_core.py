@@ -39,6 +39,7 @@ def _process_batch_core(model, batch, device, mode, *args):
     rfi_mask = None
     gt_boxes = None
     f_min, f_max, start_t, end_t = None, None, None, None
+    ascending = True
     if isinstance(batch, (list, tuple)):
         inputs = batch[0].to(device)
 
@@ -46,10 +47,11 @@ def _process_batch_core(model, batch, device, mode, *args):
             if len(batch) > 1 and isinstance(batch[1], torch.Tensor):
                 clean = batch[1].to(device)
             elif isinstance(batch[1], list):
-                f_min, f_max, start_t, end_t = args
+                f_min, f_max, start_t, end_t, ascending = args
                 if DEBUG:
+                    f1, f2 = (f_min, f_max) if ascending else (f_max, f_min)
                     print(
-                        f"[\033[36mDebug\033[0m] Extracting: f_min={f_min}, f_max={f_max}")
+                        f"[\033[36mDebug\033[0m] Extracting from {f1} MHz to {f2} MHz.")
             if len(batch) > 2 and isinstance(batch[2], torch.Tensor):
                 gt_boxes = batch[2].to(device)
 
@@ -91,7 +93,8 @@ def _process_batch_core(model, batch, device, mode, *args):
         "gt_boxes": gt_boxes,
         "raw_preds": raw_preds,
         "f_info": (f_min, f_max),
-        "t_info": (start_t, end_t)
+        "t_info": (start_t, end_t),
+        "ascending": ascending
     }
 
 
@@ -144,8 +147,12 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
         f_min, f_max = results["f_info"]
         t_start, t_end = results["t_info"]
         dt = kwarg_groups["group_dedrift"]["dt_s"]
-        freq_axis = np.arange(f_min, f_max, (f_max - f_min) / freq_frames) if f_min is not None else np.arange(
-            freq_frames)
+        ascending = results["ascending"]
+        if f_min is not None:
+            freq_axis = np.arange(f_min, f_max, (f_max - f_min) / freq_frames) if ascending else np.arange(
+                f_max, f_min, (f_min - f_max) / freq_frames)
+        else:
+            freq_axis = np.arange(freq_frames)
         time_axis = dt * np.arange(t_start, t_end) if t_start is not None else np.arange(time_frames)
         time_duration = time_frames * dt
         freq_duration = freq_frames * kwarg_groups["group_dedrift"]["df_hz"]
@@ -202,7 +209,8 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
                         continue
                     snr_val = 0.0
                     freq_change_hz = (f_stop - f_start) * freq_duration
-                    drift_rate = float(freq_change_hz / time_duration) if time_duration > 0 else 0.0
+                    relative_drift_rate = float(freq_change_hz / time_duration) if time_duration > 0 else 0.0
+                    drift_rate = -relative_drift_rate if not ascending else relative_drift_rate
                     if event.ndim == 3:
                         to_slice = event[0]
                     if to_slice.ndim != 2:
@@ -212,7 +220,7 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
                         try:
                             roi, f_start_pad, f_stop_pad, _, _ = extract_F_slice(event, f_start, f_stop,
                                                                                  pad_fraction=fraction)
-                            snr_val = SNR_filter(roi, mode="dedrift_peak", drift_hz_per_s=drift_rate,
+                            snr_val = SNR_filter(roi, mode="dedrift_peak", drift_hz_per_s=relative_drift_rate,
                                                  **kwarg_groups["group_dedrift"])
                         except Exception as e:
                             print(f"[\033[31mError\033[0m] Failed to estimate SNR for detection: {e}")
@@ -337,7 +345,7 @@ def pred(model: torch.nn.Module,
 
             # Process entire dataloader
             for batch_idx, batch in enumerate(data):
-                f_min, f_max, start_t, end_t = None, None, None, None
+                f_min, f_max, start_t, end_t, ascending = None, None, None, None, False
                 if batch_idx >= max_steps:
                     break
                 if isinstance(batch[1], list):
@@ -348,11 +356,12 @@ def pred(model: torch.nn.Module,
                     start_f = batch[1][1]
                     end_t = start_t + patch_t
                     end_f = start_f + patch_f
+                    ascending = data.dataset.ascending
                     if freqs[0] < freqs[-1]:
                         f_min, f_max = freqs[start_f], freqs[end_f - 1]
                     else:
                         f_min, f_max = freqs[end_f - 1], freqs[start_f]
 
-                results = _process_batch_core(model, batch, device, mode, f_min, f_max, start_t, end_t)
+                results = _process_batch_core(model, batch, device, mode, f_min, f_max, start_t, end_t, ascending)
                 _save_batch_results(results, batch_idx, save_dir, model.__class__.__name__, mode, save_npy, plot,
                                     **kwarg_groups)

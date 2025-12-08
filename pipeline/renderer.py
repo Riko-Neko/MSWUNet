@@ -56,6 +56,7 @@ class SETIWaterfallRenderer(QWidget):
             snr_threshold=snr_threshold, pad_fraction=pad_fraction, min_abs_drift=min_abs_drift, iou_thresh=iou_thresh,
             score_thresh=score_thresh, top_k=top_k, fsnr_threshold=fsnr_threshold, top_fraction=top_fraction,
             min_pixels=min_pixels)
+        self.ascending = self.processor.ascending
 
         self.dataset = self.processor.dataset
         self.model = self.processor.model
@@ -339,7 +340,9 @@ class SETIWaterfallRenderer(QWidget):
         patch_data, freq_range, time_range_idx = self.dataset.get_patch(row, col)
         raw_patch = patch_data
         freq_min, freq_max = freq_range  # MHz
-        time_start, time_end = (time_range_idx[0] * self.tsamp, time_range_idx[1] * self.tsamp)
+        time_start, time_end = time_range_idx[0] * self.tsamp, time_range_idx[1] * self.tsamp
+        axis = [freq_min, freq_max, time_start, time_end] if self.ascending else [freq_max, freq_min, time_start,
+                                                                                  time_end]
         tchans = time_range_idx[1] - time_range_idx[0]
 
         patch_data = patch_data.to(self.device).unsqueeze(0)  # (1, 1, t, f)
@@ -363,9 +366,7 @@ class SETIWaterfallRenderer(QWidget):
         title_font = 13
 
         # Original spectrum
-        im0 = axs[0].imshow(patch_np, aspect='auto', origin='lower',
-                            extent=[freq_min, freq_max, time_start, time_end],
-                            cmap='viridis')
+        im0 = axs[0].imshow(patch_np, aspect='auto', origin='lower', extent=axis, cmap='viridis')
         axs[0].set_ylabel("Time (seconds)", fontsize=label_font)
         axs[0].set_xlabel("Frequency (MHz)", fontsize=label_font)
         axs[0].set_title(f"Original Spectrum\nCell ({row}, {col})", fontsize=title_font)
@@ -373,9 +374,7 @@ class SETIWaterfallRenderer(QWidget):
         cbar0.set_label("Intensity", fontsize=label_font)
 
         # Denoised spectrum
-        im1 = axs[1].imshow(denoised_np, aspect='auto', origin='lower',
-                            extent=[freq_min, freq_max, time_start, time_end],
-                            cmap='viridis')
+        im1 = axs[1].imshow(denoised_np, aspect='auto', origin='lower', extent=axis, cmap='viridis')
         axs[1].set_ylabel("Time (seconds)", fontsize=label_font)
         axs[1].set_xlabel("Frequency (MHz)", fontsize=label_font)
         axs[1].set_title(f"Denoised Spectrum\nCell ({row}, {col})", fontsize=title_font)

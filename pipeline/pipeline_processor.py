@@ -11,8 +11,8 @@ from utils.metrics_utils import execute_hits_hough, SNR_filter
 
 class SETIPipelineProcessor:
     def __init__(self, dataset, model, device, mode='mask', log_dir=Path("./pipeline/log"), verbose=False,
-                 drift=[-4.0, 4.0], snr_threshold=10.0, pad_fraction=0.2, min_abs_drift=0.05, iou_thresh=0.5,
-                 score_thresh=0.5, top_k=10, fsnr_threshold=300, top_fraction=0.002, min_pixels=50):
+                 raw_output=False, drift=[-4.0, 4.0], snr_threshold=10.0, pad_fraction=0.2, min_abs_drift=0.05,
+                 iou_thresh=0.5, score_thresh=0.5, top_k=10, fsnr_threshold=300, top_fraction=0.002, min_pixels=50):
         """
         Initialize the SETI pipeline processor with dataset and model
 
@@ -23,6 +23,7 @@ class SETIPipelineProcessor:
             mode: 'mask' or 'detection' - operating mode
             log_dir: Directory for log files
             verbose: Whether to use simple console output
+            raw_output: Whether to use raw output without post-processing
             drift: Drift rate range for mask mode [min_drift, max_drift] in Hz/s
             snr_threshold: SNR threshold for mask mode hits detection
             pad_fraction: Fraction of extents to pad the events in detection.
@@ -38,10 +39,11 @@ class SETIPipelineProcessor:
         assert mode in ['mask', 'detection'], f"Unsupported mode: {mode}"
 
         self.dataset = dataset
+        self.ascending = dataset.ascending
         self.model = model.to(device)
         self.device = device
         self.mode = mode
-        self.snr_threshold = snr_threshold
+        self.snr_threshold = snr_threshold if not raw_output else 0.0
 
         # Grid dimensions
         self.grid_height = len(dataset.start_t_list)
@@ -67,10 +69,10 @@ class SETIPipelineProcessor:
             self.drift = drift
             self.min_abs_drift = min_abs_drift
         else:  # detection mode
-            self.nms_iou_thresh = iou_thresh
-            self.nms_score_thresh = score_thresh
-            self.nms_top_k = top_k
-            self.fSNR_threshold = fsnr_threshold
+            self.nms_iou_thresh = iou_thresh if not raw_output else 1.0
+            self.nms_score_thresh = score_thresh if not raw_output else 0.0
+            self.nms_top_k = top_k if not raw_output else None
+            self.fSNR_threshold = fsnr_threshold if not raw_output else 0.0
             self.top_fraction = top_fraction
             self.min_pixels = min_pixels
             self.pad_fraction = pad_fraction
@@ -78,6 +80,8 @@ class SETIPipelineProcessor:
         # Logging setup
         if log_dir != Path("./pipeline/log"):
             log_dir = Path("./pipeline/log") / log_dir
+        if raw_output:
+            log_dir = Path("./pipeline/log/raw")
         log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Overwrite log file if it exists
@@ -152,23 +156,27 @@ class SETIPipelineProcessor:
             if class_id < 0:
                 continue
             # Convert normalized frequencies to absolute frequencies (MHz)
-            f_start = freq_min + (freq_max - freq_min) * f_start_norm
-            f_stop = freq_min + (freq_max - freq_min) * f_stop_norm
+            if self.ascending:
+                f_start = freq_min + (freq_max - freq_min) * f_start_norm
+                f_stop = freq_min + (freq_max - freq_min) * f_stop_norm
+            else:
+                f_start = freq_max - (freq_max - freq_min) * f_start_norm
+                f_stop = freq_max - (freq_max - freq_min) * f_stop_norm
 
             # Calculate drift rate (Hz/s)
-            # Drift rate = (frequency change) / time duration
             freq_change_hz = (f_stop - f_start) * 1e6  # Convert MHz to Hz
             drift_rate = freq_change_hz / time_duration if time_duration > 0 else 0.0
+            relative_drift_rate = -drift_rate if not self.ascending else drift_rate
 
             # Determine uncorrected frequency (starting frequency)
-            uncorr_freq = f_start if f_start_norm <= f_stop_norm else f_stop
+            uncorr_freq = f_start
 
             snr_val = 0.0
             if patch_to_slice is not None:
                 try:
                     roi, f_start_pad, f_stop_pad, _, _ = extract_F_slice(patch_to_slice, f_start_norm, f_stop_norm,
                                                                          pad_fraction=self.pad_fraction)
-                    snr_val = SNR_filter(roi, mode="dedrift_peak", drift_hz_per_s=drift_rate, df_hz=self.foff,
+                    snr_val = SNR_filter(roi, mode="dedrift_peak", drift_hz_per_s=relative_drift_rate, df_hz=self.foff,
                                          dt_s=self.tsamp)
                 except Exception as e:
                     self.logger.warning(f"Failed to estimate SNR for detection: {e}")
@@ -241,7 +249,7 @@ class SETIPipelineProcessor:
                         confidence = confidences.max().item() if confidences.numel() > 0 else 0.0
 
                 # Determine status based on confidence
-                if (confidence > self.nms_score_thresh) and (patch_snr >= self.fSNR_threshold):
+                if (confidence >= self.nms_score_thresh) and (patch_snr >= self.fSNR_threshold):
                     status = True
                 else:
                     status = False
@@ -303,6 +311,7 @@ class SETIPipelineProcessor:
                 # Add additional columns
                 df_hits['cell_row'] = row
                 df_hits['cell_col'] = col
+                df_hits['gSNR'] = patch_snr
                 df_hits['freq_min'] = freq_range[0]
                 df_hits['freq_max'] = freq_range[1]
                 df_hits['time_start'] = time_range[0]
@@ -321,7 +330,7 @@ class SETIPipelineProcessor:
 
         # Log to file (and console if verbose)
         status_str = "Signal detected" if status is True else "No signal" if status is False else "Uncertain"
-        log_msg = f"Processed cell ({row}, {col}): {status_str} (Confidence: {confidence:.2f})\n"
+        log_msg = f"Processed cell ({row}, {col}): {status_str} (Confidence: {confidence:.2f}, Global SNR: {patch_snr:.2f})\n"
         log_msg += f"Frequency: {freq_range[0]:.4f} - {freq_range[1]:.4f} MHz\n"
         log_msg += f"Time: {time_range[0]:.2f} - {time_range[1]:.2f} seconds\n"
         log_msg += f"Mode: {self.mode}"

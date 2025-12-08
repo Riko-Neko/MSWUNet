@@ -101,7 +101,7 @@ class DynamicSpectrumDataset(Dataset):
         for i in range(n_signals):
             # 随机路径类型
             path_type = random.choices(['constant', 'sine', 'squared', 'rfi'],
-                                       weights=[0.65, 0.1, 0.25, 0.])[0]
+                                       weights=[0.6, 0., 0.4, 0.])[0]
 
             def _truncated_normal(a, b, mean=0.0, std=1.2):
                 lower = (a - mean) / std
@@ -191,7 +191,7 @@ class DynamicSpectrumDataset(Dataset):
             'NBC_amp': np.random.uniform(1, 25),
             'NBT': np.random.randint(1, self.tchans // 16 + 1),
             'NBT_amp': np.random.uniform(1, 50),
-            'BBT': np.random.randint(1, self.fchans // 256),
+            'BBT': np.random.randint(1, self.fchans // 256 + 1),
             'BBT_amp': np.random.uniform(1, 25),
             'LowDrift': np.random.randint(1, 10),
             'LowDrift_amp_factor': np.random.uniform(0.1, 1.0),
@@ -403,6 +403,7 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=Fals
         fch1 = dataset.fch1
         df = dataset.df
         fchans = dataset.fchans
+        figlen = 10 if fchans <= 512 else 15
         if dataset.ascending:
             freqs = fch1 + np.arange(fchans) * df
         else:
@@ -410,9 +411,9 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=Fals
 
         if with_spectrum:
             if spectrum_type == "fft2d":
-                fig, axs = plt.subplots(2, 1, figsize=(15, 6), sharex=False)
+                fig, axs = plt.subplots(2, 1, figsize=(figlen, 6), sharex=False)
             else:
-                fig, axs = plt.subplots(2, 1, figsize=(15, 6), sharex=True)
+                fig, axs = plt.subplots(2, 1, figsize=(figlen, 6), sharex=True)
 
             if spectrum_type == "fft2d":
                 # 原始动态频谱
@@ -458,7 +459,7 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=Fals
                 axs[1].set_title(f"Spectrum ({spectrum_type})")
 
         else:
-            fig, ax = plt.subplots(figsize=(15, 3))
+            fig, ax = plt.subplots(figsize=(figlen, 3))
             im = ax.imshow(spec, aspect='auto', origin='lower', cmap='viridis',
                            extent=[freqs[0], freqs[-1], 0, dataset.tchans])
             ax.set_title(f"{kind} spectrogram #{i}")
@@ -476,15 +477,15 @@ def plot_samples(dataset, kind='clean', num=10, out_dir=None, with_spectrum=Fals
 
 if __name__ == "__main__":
     tchans = 116
-    fchans = 1024
+    fchans = 256
     df = 7.450580597
     dt = 10.200547328
-    drift_min = -4.0
+    drift_min = -4.0  # for fchans 1024
     drift_max = 4.0
     drift_min_abs = df // (tchans * dt)
     dataset = DynamicSpectrumDataset(mode='test', tchans=tchans, fchans=fchans, df=df, dt=dt, fch1=None, ascending=True,
                                      drift_min=drift_min, drift_max=drift_max, drift_min_abs=drift_min_abs,
-                                     snr_min=25.0, snr_max=45.0, width_min=7.5, width_max=30, num_signals=(1, 1),
+                                     snr_min=30.0, snr_max=50.0, width_min=7.5, width_max=20, num_signals=(1, 1),
                                      noise_std_min=0.025, noise_std_max=0.05, noise_mean_min=2, noise_mean_max=3,
                                      noise_type='chi2', use_fil=True,
                                      background_fil="../data/33exoplanets/yy/Kepler-438_M01_pol2_f1139.58-1142.31.fil")
@@ -502,6 +503,6 @@ if __name__ == "__main__":
         from arXiv:2502.20419v1 [astro-ph.IM] 27 Feb 2025
     """
 
-    plot_samples(dataset, kind='clean', num=50, with_spectrum=True, spectrum_type='mean')
-    plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
+    # plot_samples(dataset, kind='clean', num=100, with_spectrum=True, spectrum_type='mean')
+    plot_samples(dataset, kind='noisy', num=100, with_spectrum=True, spectrum_type='fft2d')
     # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)

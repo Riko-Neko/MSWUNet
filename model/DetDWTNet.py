@@ -1,12 +1,11 @@
-from math import sqrt
-from typing import Dict
-
 import pytorch_wavelets.dwt.lowlevel as lowlevel
 import pywt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchinfo import summary
+
+from model.utils.HRFreqRegressor1D import HRFreqRegressionDetector
 
 """
 Temporary tools for debugging.
@@ -430,163 +429,6 @@ class ConvBlock1D(nn.Module):
 
 
 """
-Regressive heads for 1D-frequency object detection.
-
-Design goals (implemented):
-- 1D-frequency object detection: predict start and end frequency of each object, and classify each object.
-"""
-
-
-class CoordAtt(nn.Module):
-    """
-    Coordinate Attention
-    Reference idea: encode H and W positional information separately and generate channel attention.
-    Implementation follows the common open-source variant.
-    Input: (B, C, H, W)
-    Output: (B, C, H, W)
-    """
-
-    def __init__(self, inp, oup, reduction=32):
-        super().__init__()
-        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))  # keep T, collapse F
-        self.pool_w = nn.AdaptiveAvgPool2d((1, None))  # keep F, collapse T
-        mip = max(8, inp // reduction)
-
-        self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0, bias=False)
-        self.bn1 = nn.BatchNorm2d(mip)
-        self.act = nn.ReLU(inplace=True)
-        self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0, bias=False)
-        self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0, bias=False)
-
-    def forward(self, x):
-        B, C, H, W = x.size()
-        x_h = self.pool_h(x)  # (B, C, T, 1)
-        x_w = self.pool_w(x).permute(0, 1, 3, 2)  # (B, C, 1, F) -> (B, C, F, 1)
-        y = torch.cat([x_h, x_w], dim=2)  # (B, C, H + F, 1)
-        y = self.conv1(y)
-        y = self.bn1(y)
-        y = self.act(y)
-
-        x_h_att = self.conv_h(y[:, :, :H, :])  # (B, C, T, 1)
-        x_w_att = self.conv_w(y[:, :, H:, :]).permute(0, 1, 3, 2)  # (B, C, F, 1) -> (B, C, 1, F)
-        attn = torch.sigmoid(x_h_att + x_w_att)  # broadcasting to (B,C,H,W)
-        return x * attn
-
-
-class FreqRegressionDetector(nn.Module):
-    """
-    Input: x (B, in_channels, T, F)
-    Output: dict with keys:
-        - 'f_start': Tensor (B, N)  (raw logits)
-        - 'f_end'  : Tensor (B, N)
-        - 'class_logits': Tensor (B, N, num_classes)
-        - 'confidence'  : Tensor (B, N)  (logits)
-    Args:
-        - fchans: number of frequency bins
-        - in_channels: number of input channels
-        - N: Fixed number of output items
-        - num_classes: number of classes
-        - feat_channels: base channels in CNN
-        - hidden_dim: hidden units in FC (not used in linear head)
-        - backbone_downsample: downsampling layers
-        - dropout: dropout rate
-    Usage:
-        model = FreqRegressionDetector(in_channels=1, N=8, num_classes=2)
-        out = model(x)  # out is a dict
-    """
-
-    def __init__(self, fchans: int = 1024, in_channels: int = 1, N: int = 5, num_classes: int = 2,
-                 feat_channels: int = 64, backbone_downsample: int = 4, dropout: float = 0.0):
-        super().__init__()
-        self.N = N
-        self.num_classes = num_classes
-        self.fchans = fchans
-        self.backbone_downsample = backbone_downsample
-        self.bottleneck = feat_channels
-        backbone_coord_atts = True
-        coord_att_reduction = 32
-        strides = [(2, 2), (3, 2), (2, 2), (3, 2)]
-        neck_dim_T = 3
-
-        convs = []
-        ch = in_channels
-        for i in range(backbone_downsample):
-            out_ch = feat_channels * (2 ** i)
-            stride = strides[i]
-            convs.append(nn.Conv2d(ch, out_ch, kernel_size=3, stride=stride, padding=1, bias=False))
-            convs.append(nn.BatchNorm2d(out_ch))
-            convs.append(nn.ReLU(inplace=True))
-            if dropout > 0:
-                convs.append(nn.Dropout2d(p=dropout))
-            ch = out_ch
-            if backbone_coord_atts:
-                convs.append(CoordAtt(out_ch, out_ch, reduction=coord_att_reduction))
-
-        convs.append(nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1, bias=False))
-        convs.append(nn.BatchNorm2d(ch))
-        convs.append(nn.ReLU(inplace=True))
-        self.conv_backbone = nn.Sequential(*convs)
-
-        self.freq_dim = self._get_F_dim(self.fchans, self.backbone_downsample)  # compute F'
-        self.time_freq_pool = nn.AdaptiveAvgPool2d((neck_dim_T, self.freq_dim))  # T' -> 2
-
-        self.bottleneck_conv = nn.Conv2d(ch, self.bottleneck, kernel_size=1, bias=False)
-        self.bottleneck_bn = nn.BatchNorm2d(self.bottleneck)
-        self.bottleneck_relu = nn.ReLU(inplace=True)
-        self.coord_att_bottleneck = CoordAtt(self.bottleneck, self.bottleneck, reduction=coord_att_reduction)
-
-        neck_dim = self.bottleneck * neck_dim_T * self.freq_dim
-        out_dim = N * (2 + num_classes + 1)  # f_start, f_end, class_logits, confidence
-        hidden_dim = 1 << (int(sqrt(neck_dim * out_dim)).bit_length() - 1)  # hidden_dim ≈ sqrt(in_dim × out_dim)
-        # hidden_dim = 1 << (int(sqrt(neck_dim * out_dim)) - 1).bit_length()
-        self.linear_head = nn.Sequential(nn.Linear(neck_dim, hidden_dim), nn.Linear(hidden_dim, out_dim))
-
-        self._init_weights()
-
-    def _get_F_dim(self, fchans: int, backbone_downsample: int) -> int:
-        f = fchans
-        for i in range(backbone_downsample):
-            f = (f + 1) // 2
-        return int(f)
-
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-                if getattr(m, "bias", None) is not None:
-                    nn.init.constant_(m.bias, 0.0)
-            elif isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0.0)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1.0)
-                nn.init.constant_(m.bias, 0.0)
-
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """
-        Return raw logits for f_start, f_end, class_logits, and confidence.
-        Input: x (B, in_channels, T, F)
-        """
-        B = x.size(0)
-        feat = self.conv_backbone(x)  # (B, ch, T', F')
-        pooled = self.time_freq_pool(feat)  # (B, ch, 2, freq_dim)
-        feat = self.bottleneck_relu(self.bottleneck_bn(self.bottleneck_conv(pooled)))  # (B, bottleneck, 2, freq_dim)
-        feat = self.coord_att_bottleneck(feat)  # (B, bottleneck, 2, freq_dim)
-        pooled = feat.view(B, -1)  # (B, bottleneck * 2 * freq_dim)
-        out = self.linear_head(pooled)  # (B, N * (2 + num_classes + 1))
-        out = out.view(B, self.N, -1)  # (B, N, 2 + num_classes + 1)
-
-        # split outputs
-        f_start = out[..., 0]  # (B, N)
-        f_end = out[..., 1]  # (B, N)
-        class_logits = out[..., 2:2 + self.num_classes]  # (B, N, num_classes)
-        confidence = out[..., -1]  # (B, N)
-
-        return {"f_start": f_start, "f_end": f_end, "class_logits": class_logits, "confidence": confidence}
-
-
-"""
 Main model for DWTNet.
 """
 
@@ -636,8 +478,13 @@ class DWTNet(nn.Module):
         self.deno_out = nn.Conv2d(filters[0], in_chans, kernel_size=1)
 
         # Regressions 分支
-        self.detector = FreqRegressionDetector(fchans=fchans, in_channels=in_chans, N=N, num_classes=num_classes,
-                                               feat_channels=feat_channels, dropout=dropout)
+        # self.detector = FreqRegressionDetector(fchans=fchans, in_channels=in_chans, N=N, num_classes=num_classes,
+        #                                        feat_channels=feat_channels, dropout=dropout)
+
+        self.detector = HRFreqRegressionDetector(fchans=fchans, in_channels=in_chans, N=N, num_classes=num_classes,
+                                                 base_channels=feat_channels, num_branches=3, num_stages=2,
+                                                 bottleneck_channels=128, coord_att_reduction=32, neck_dim_T=2,
+                                                 dropout=0.0, num_heads=4)
 
     def forward(self, x):
         lls = []
@@ -711,33 +558,33 @@ Testing code.
 """
 if __name__ == '__main__':
     test_mode = 'model'
-    # test_mode = 'det'
+
+    # (batch_size, channels, time channels, freq channels)
+    B = 1
+    C = 1
+    tchans = 116
+    fchans = 256
 
     if test_mode == 'model':
         print(f"[\033[32mInfo\033[0m] Testing for DWTNet:")
         model = DWTNet(in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4', extension_mode='reflect',
-                       fchans=1024, N=5, num_classes=2, feat_channels=64, dropout=0.0)
+                       fchans=fchans, N=10, num_classes=2, feat_channels=64, dropout=0.0)
         print(model)
 
-        # (batch_size, channels, time channels, freq channels)
-        B = 1
-        C = 1
-        H = 116
-        W = 1024
         tile_size = 16
-        row = torch.arange(H).unsqueeze(1)
-        col = torch.arange(W).unsqueeze(0)
+        row = torch.arange(tchans).unsqueeze(1)
+        col = torch.arange(fchans).unsqueeze(0)
         checkerboard = ((row // tile_size + col // tile_size) % 2).float()
         wave = (torch.sin(row / 10.0) + torch.cos(col / 10.0)) * 0.15 + 0.15
         line = torch.zeros_like(wave)
         thickness = 3
         k = 0.5
-        b = W // 4
-        for y in range(H):
+        b = fchans // 4
+        for y in range(tchans):
             x_center = int(k * y + b)
-            if 0 <= x_center < W:
+            if 0 <= x_center < fchans:
                 x_start = max(0, x_center - thickness)
-                x_end = min(W, x_center + thickness + 1)
+                x_end = min(fchans, x_center + thickness + 1)
                 line[y, x_start:x_end] = 1.0
 
         # mode
@@ -746,31 +593,17 @@ if __name__ == '__main__':
         # mode = "noise"
 
         if mode == "checkerboard":
-            test_input = checkerboard.unsqueeze(0).unsqueeze(0).expand(B, C, H, W).clone()
+            test_input = checkerboard.unsqueeze(0).unsqueeze(0).expand(B, C, tchans, fchans).clone()
         elif mode == "wave_line":
             combined = wave.clone()
             combined[line > 0] = 255
-            test_input = combined.unsqueeze(0).unsqueeze(0).expand(B, C, H, W).clone()
+            test_input = combined.unsqueeze(0).unsqueeze(0).expand(B, C, tchans, fchans).clone()
         else:
-            test_input = torch.randn((B, C, H, W))
+            test_input = torch.randn((B, C, tchans, fchans))
 
         denoised, detections = model(test_input)
         print(f"Input shape: {test_input.shape}")
         print(f"Denoised shape: {denoised.shape}")
         print(f"Detections: {detections}")
         print(f"[\033[32mInfo\033[0m] Generating summary for DWTNet:")
-        summary(model, input_size=(1, 1, 116, 1024))
-
-    if test_mode == 'det':
-        print(f"[\033[32mInfo\033[0m] Testing for FPNDetector:")
-        B = 4
-        T = 128
-        F = 256
-        x = torch.randn(B, 1, T, F)
-        model = FreqRegressionDetector(in_channels=1, N=5, num_classes=2)
-        out = model(x)
-        dec = model.decode(out, apply_sigmoid=True, apply_softmax_class=False)
-        print("f_start shape:", dec["f_start"].shape)  # (B, N)
-        print("f_end shape:", dec["f_end"].shape)  # (B, N)
-        print("class shape:", dec["class"].shape)  # (B, N, C) if softmax else logits
-        print("confidence shape:", dec["confidence"].shape)  # (B, N)
+        summary(model, input_size=(1, 1, 116, fchans))

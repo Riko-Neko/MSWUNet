@@ -35,7 +35,8 @@ from torch.utils.data import DataLoader
 from torchinfo import summary
 
 from gen.SETIdataset import DynamicSpectrumDataset
-from model.DetDWTNet import DWTNet, FreqRegressionDetector
+from model.DetDWTNet import DWTNet
+from model.utils.HRFreqRegressor1D import HRFreqRegressionDetector
 from utils.loss_func import DetectionCombinedLoss, MaskCombinedLoss
 from utils.train_core import train_model
 from utils.train_utils import safe_load_state_dict, load_optimizer_selectively
@@ -48,6 +49,7 @@ mode = "detection"
 # Data config
 tchans = 116
 fchans = 1024
+# fchans = 256
 df = 7.450580597
 dt = 10.200547328
 fch1 = None
@@ -55,8 +57,8 @@ ascending = True
 drift_min = -4.0
 drift_max = 4.0
 drift_min_abs = df // (tchans * dt)
-snr_min = 25.0
-snr_max = 40.0
+snr_min = 30.0
+snr_max = 50.0
 width_min = 7.5
 width_max = 20
 num_signals = (0, 1)
@@ -94,19 +96,30 @@ checkpoint_dir = "./checkpoints/dwtnet"
 # Model config
 dim = 64
 levels = [2, 4, 8, 16]
-feat_channels = dim * ([1] + levels)[0]
 dwtnet_args = dict(
     in_chans=1,
     dim=dim,
     levels=levels,
     wavelet_name='db4',
-    extension_mode='periodization',
+    extension_mode='periodization')
+unet_args = dict()
+
+# detector = FreqRegressionDetector
+detector = HRFreqRegressionDetector
+feat_channels = 64
+N = 10
+# detector_args = dict(
+#     fchans=fchans,
+#     N=10,
+#     num_classes=2,
+#     feat_channels=feat_channels,
+#     dropout=0.005)
+detector_args = dict(
     fchans=fchans,
-    N=5,
+    N=N,
     num_classes=2,
     feat_channels=feat_channels,
     dropout=0.005)
-unet_args = dict()
 
 regress_loss_args = dict(
     lambda_denoise=0.,
@@ -114,7 +127,7 @@ regress_loss_args = dict(
     lambda_learnable=False,
     regression_loss_kwargs=dict(
         num_classes=2,
-        N=5,
+        N=N,
         w_loc=1.5,
         w_class=0.1,
         w_conf=0.5,
@@ -178,7 +191,7 @@ def main():
 
     # Loss function and optimizer
     if mode == "detection":
-        model = DWTNet(**dwtnet_args)
+        model = DWTNet(**dwtnet_args, **detector_args)
         # model = UNet(**unet_args)
         criterion = DetectionCombinedLoss(**regress_loss_args)
     else:  # "mask" as default
@@ -246,16 +259,15 @@ def main():
         state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
         if mode == "detection":
             try:
-                model.load_state_dict(state_dict, strict=not mismatch_load)
+                model.load_state_dict(state_dict, strict=not mismatch_load or force_reconstruct)
             except RuntimeError:
                 if force_reconstruct:
                     print(
                         "[\033[33mWarn\033[0m] Detector state dict mismatch detected. Loading backbone weights and reinitializing detector.")
                     filtered_dict = {k: v for k, v in state_dict.items() if not k.startswith('detector.')}
                     model.load_state_dict(filtered_dict, strict=False)
-                    model.detector = FreqRegressionDetector(fchans=fchans, in_channels=dwtnet_args['in_chans'],
-                                                            N=dwtnet_args['N'], num_classes=dwtnet_args['num_classes'],
-                                                            feat_channels=feat_channels, dropout=dwtnet_args['dropout'])
+                    model.detector = detector(**detector_args)
+                    mismatched = True
                 else:
                     mismatched = safe_load_state_dict(model, state_dict) if mismatch_load else model.load_state_dict(
                         state_dict, strict=True)
