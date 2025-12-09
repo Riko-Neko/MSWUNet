@@ -1,3 +1,4 @@
+from math import sqrt
 from typing import List, Dict
 
 import torch
@@ -111,7 +112,11 @@ class FreqRegressionDetector(nn.Module):
         self.bottleneck_relu = nn.ReLU(inplace=True)
         self.coord_att_bottleneck = CoordAtt(self.bottleneck, self.bottleneck, reduction=coord_att_reduction)
 
-        neck_dim = self.bottleneck * neck_dim_T * self.freq_dim
+        freq_coords = torch.linspace(0.0, 1.0, steps=self.freq_dim).view(1, 1, 1, self.freq_dim)
+        freq_coords = freq_coords.expand(1, 1, neck_dim_T, self.freq_dim)  # (1, 1, 2, F')
+        self.register_buffer("freq_coords", freq_coords, persistent=False)
+
+        neck_dim = (self.bottleneck + 1) * neck_dim_T * self.freq_dim
         out_dim = N * (2 + num_classes + 1)  # f_start, f_end, class_logits, confidence
         # hidden_dim = 1 << (int(sqrt(neck_dim * out_dim)).bit_length() - 1)  # hidden_dim ≈ sqrt(in_dim × out_dim)
         # hidden_dim = 1 << (int(sqrt(neck_dim * out_dim)) - 1).bit_length()
@@ -150,7 +155,9 @@ class FreqRegressionDetector(nn.Module):
         pooled = self.time_freq_pool(feat)  # (B, ch, 2, freq_dim)
         feat = self.bottleneck_relu(self.bottleneck_bn(self.bottleneck_conv(pooled)))  # (B, bottleneck, 2, freq_dim)
         feat = self.coord_att_bottleneck(feat)  # (B, bottleneck, 2, freq_dim)
-        pooled = feat.view(B, -1)  # (B, bottleneck * 2 * freq_dim)
+        coord = self.freq_coords.expand(B, -1, -1, -1)  # (B, 1, 2, freq_dim)
+        feat = torch.cat([feat, coord], dim=1)  # (B, bottleneck+1, 2, freq_dim)
+        pooled = feat.view(B, -1)  # (B, (bottleneck + 1) * 2 * freq_dim)
         out = self.linear_head(pooled)  # (B, N * (2 + num_classes + 1))
         out = out.view(B, self.N, -1)  # (B, N, 2 + num_classes + 1)
 

@@ -36,7 +36,7 @@ from torchinfo import summary
 
 from gen.SETIdataset import DynamicSpectrumDataset
 from model.DetDWTNet import DWTNet
-from model.utils.Regressor1D import HRFreqRegressionDetector
+from model.utils.Regressor1D import FreqRegressionDetector
 from utils.loss_func import DetectionCombinedLoss, MaskCombinedLoss
 from utils.train_core import train_model
 from utils.train_utils import safe_load_state_dict, load_optimizer_selectively
@@ -69,7 +69,7 @@ noise_mean_max = 3
 nosie_type = "chi2"
 rfi_enhance = False
 use_fil = True
-fil_folder = Path('./data/33exoplanets/col')
+fil_folder = Path('./data/33exoplanets/bg/clean')
 background_fil = list(fil_folder.rglob("*.fil"))
 
 # Training config
@@ -88,10 +88,9 @@ force_save_best = True
 freeze_backbone = True
 force_reconstruct = False
 mismatch_load = True
-
-# Optimization config
 # checkpoint_dir = "./checkpoints/unet"
-checkpoint_dir = "./checkpoints/dwtnet"
+checkpoint_dir = "./checkpoints/mswunet/bin1024"
+# checkpoint_dir = "./checkpoints/mswunet/bin256"
 
 # Model config
 dim = 64
@@ -104,8 +103,8 @@ dwtnet_args = dict(
     extension_mode='periodization')
 unet_args = dict()
 
-# detector = FreqRegressionDetector
-detector = HRFreqRegressionDetector
+detector = FreqRegressionDetector
+# detector = HRFreqRegressionDetector
 feat_channels = 64
 N = 10
 detector_args = dict(
