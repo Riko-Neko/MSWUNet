@@ -36,7 +36,7 @@ from torchinfo import summary
 
 from gen.SETIdataset import DynamicSpectrumDataset
 from model.DetDWTNet import DWTNet
-from model.utils.HRFreqRegressor1D import HRFreqRegressionDetector
+from model.utils.Regressor1D import HRFreqRegressionDetector
 from utils.loss_func import DetectionCombinedLoss, MaskCombinedLoss
 from utils.train_core import train_model
 from utils.train_utils import safe_load_state_dict, load_optimizer_selectively

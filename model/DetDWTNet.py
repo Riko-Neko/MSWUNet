@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchinfo import summary
 
-from model.utils.HRFreqRegressor1D import HRFreqRegressionDetector
+from model.utils.Regressor1D import FreqRegressionDetector
 
 """
 Temporary tools for debugging.
@@ -478,13 +478,8 @@ class DWTNet(nn.Module):
         self.deno_out = nn.Conv2d(filters[0], in_chans, kernel_size=1)
 
         # Regressions 分支
-        # self.detector = FreqRegressionDetector(fchans=fchans, in_channels=in_chans, N=N, num_classes=num_classes,
-        #                                        feat_channels=feat_channels, dropout=dropout)
-
-        self.detector = HRFreqRegressionDetector(fchans=fchans, in_channels=in_chans, N=N, num_classes=num_classes,
-                                                 feat_channels=feat_channels, num_branches=3, num_stages=2,
-                                                 bottleneck_channels=128, coord_att_reduction=32, neck_dim_T=2,
-                                                 dropout=dropout, num_heads=4)
+        self.detector = FreqRegressionDetector(fchans=fchans, in_channels=in_chans, N=N, num_classes=num_classes,
+                                               feat_channels=feat_channels, dropout=dropout)
 
     def forward(self, x):
         lls = []
@@ -563,7 +558,7 @@ if __name__ == '__main__':
     B = 1
     C = 1
     tchans = 116
-    fchans = 256
+    fchans = 1024
 
     if test_mode == 'model':
         print(f"[\033[32mInfo\033[0m] Testing for DWTNet:")

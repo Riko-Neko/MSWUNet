@@ -1,4 +1,3 @@
-from math import sqrt
 from typing import List, Dict
 
 import torch
@@ -81,7 +80,7 @@ class FreqRegressionDetector(nn.Module):
         self.bottleneck = feat_channels
         backbone_coord_atts = False
         coord_att_reduction = 32
-        strides = [(2, 2), (3, 2), (2, 2), (3, 2)]
+        strides = [(2, 1), (3, 1), (2, 1), (3, 1)]
         f_reduction = [s[1] for s in strides]
         neck_dim_T = 2
 
@@ -115,8 +114,9 @@ class FreqRegressionDetector(nn.Module):
         neck_dim = self.bottleneck * neck_dim_T * self.freq_dim
         out_dim = N * (2 + num_classes + 1)  # f_start, f_end, class_logits, confidence
         # hidden_dim = 1 << (int(sqrt(neck_dim * out_dim)).bit_length() - 1)  # hidden_dim ≈ sqrt(in_dim × out_dim)
-        hidden_dim = 1 << (int(sqrt(neck_dim * out_dim)) - 1).bit_length()
-        self.linear_head = nn.Sequential(nn.Linear(neck_dim, hidden_dim), nn.Linear(hidden_dim, out_dim))
+        # hidden_dim = 1 << (int(sqrt(neck_dim * out_dim)) - 1).bit_length()
+        # self.linear_head = nn.Sequential(nn.Linear(neck_dim, hidden_dim), nn.Linear(hidden_dim, out_dim))
+        self.linear_head = nn.Sequential(nn.Linear(neck_dim, out_dim))
 
         self._init_weights()
 
