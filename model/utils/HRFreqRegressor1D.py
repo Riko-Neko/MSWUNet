@@ -358,7 +358,7 @@ class HRFreqRegressionDetector(nn.Module):
     """
 
     def __init__(self, fchans: int = 1024, in_channels: int = 1, N: int = 5, num_classes: int = 2,
-                 base_channels: int = 64, num_branches: int = 3, num_stages: int = 2, bottleneck_channels: int = 128,
+                 feat_channels: int = 64, num_branches: int = 3, num_stages: int = 2, bottleneck_channels: int = 128,
                  coord_att_reduction: int = 32, neck_dim_T: int = 2, dropout: float = 0.0, num_heads: int = 4):
         super().__init__()
         assert 1 <= num_branches <= 4, "1-4 branches supported."
@@ -376,19 +376,19 @@ class HRFreqRegressionDetector(nn.Module):
         norm_layer = nn.BatchNorm2d
 
         # ---- Stem: light conv stack to unify input channels ----
-        stem_layers = [nn.Conv2d(in_channels, base_channels, kernel_size=3, stride=1, padding=1, bias=False),
-                       norm_layer(base_channels), nn.ReLU(inplace=True)]
+        stem_layers = [nn.Conv2d(in_channels, feat_channels, kernel_size=3, stride=1, padding=1, bias=False),
+                       norm_layer(feat_channels), nn.ReLU(inplace=True)]
         if dropout > 0:
             stem_layers.append(nn.Dropout2d(p=dropout))
         stem_layers.extend(
-            [nn.Conv2d(base_channels, base_channels, kernel_size=3, stride=1, padding=1, bias=False),
-             norm_layer(base_channels), nn.ReLU(inplace=True)])
+            [nn.Conv2d(feat_channels, feat_channels, kernel_size=3, stride=1, padding=1, bias=False),
+             norm_layer(feat_channels), nn.ReLU(inplace=True)])
         self.stem = nn.Sequential(*stem_layers)
 
         # ---- multi-resolution branches ----
-        branch_channels = [base_channels * (2 ** i) for i in range(num_branches)]
+        branch_channels = [feat_channels * (2 ** i) for i in range(num_branches)]
         self.branch_channels = branch_channels
-        self.initial_branches = self._make_initial_branches(base_channels, branch_channels, norm_layer, dropout)
+        self.initial_branches = self._make_initial_branches(feat_channels, branch_channels, norm_layer, dropout)
 
         # ---- HR-style stages along frequency axis ----
         from typing import List as _List  # for type clarity

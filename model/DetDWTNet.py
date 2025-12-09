@@ -482,9 +482,9 @@ class DWTNet(nn.Module):
         #                                        feat_channels=feat_channels, dropout=dropout)
 
         self.detector = HRFreqRegressionDetector(fchans=fchans, in_channels=in_chans, N=N, num_classes=num_classes,
-                                                 base_channels=feat_channels, num_branches=3, num_stages=2,
+                                                 feat_channels=feat_channels, num_branches=3, num_stages=2,
                                                  bottleneck_channels=128, coord_att_reduction=32, neck_dim_T=2,
-                                                 dropout=0.0, num_heads=4)
+                                                 dropout=dropout, num_heads=4)
 
     def forward(self, x):
         lls = []
