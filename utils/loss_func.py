@@ -411,7 +411,9 @@ class RegressionHeadLoss(nn.Module):
 
         if total_matched == 0:
             zero = torch.tensor(0.0, device=device)
-            return zero, {"loc_loss": zero, "class_loss": zero, "conf_loss": zero, "dir_loss": zero, "total_loss": zero}
+            loss_dict = {"loc_loss": zero, "class_loss": zero, "conf_loss": zero, "dir_loss": zero, "total_loss": zero,
+                         "matched_count": total_matched}
+            return zero, loss_dict
 
         loc_loss_avg = total_loc / (total_matched + self.eps)
         class_loss_avg = total_class / (total_matched + self.eps)
@@ -423,7 +425,7 @@ class RegressionHeadLoss(nn.Module):
         loss_dict = {"loc_loss": loc_loss_avg.detach(), "class_loss": class_loss_avg.detach(),
                      "conf_loss": conf_loss_avg.detach(), "dir_loss": dir_loss_avg.detach(),
                      "total_loss": total_loss.detach(),
-                     "matched_count": total_matched, }
+                     "matched_count": total_matched}
         return total_loss, loss_dict
 
 

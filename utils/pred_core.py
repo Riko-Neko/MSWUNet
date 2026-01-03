@@ -169,7 +169,8 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
                 logits_value = probability > 0.5
 
             # Create figure with subplots
-            fig, axs = plt.subplots(5, 1, figsize=(14, 35))
+            figlen = 9 if freq_frames <= 512 else 14
+            fig, axs = plt.subplots(5, 1, figsize=(figlen, figlen * 2.3))
 
             def plot_spec(ax, data, title, cmap='viridis'):
                 """Helper function to plot spectrum data"""
@@ -258,7 +259,8 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
                 snr_vals, drift_rates = _get_snrs(events_patch, pad_fraction, gt_starts, gt_stops)
 
             # Create figure with subplots
-            fig, axs = plt.subplots(3, 1, figsize=(15, 9))
+            figlen = 9 if freq_frames <= 512 else 14
+            fig, axs = plt.subplots(3, 1, figsize=(figlen, 9))
 
             def plot_spec(ax, data, title, cmap='viridis', boxes=None, normalized=False, snrs=None,
                           color=['red', 'green'], linestyle='--', linewidth=2):

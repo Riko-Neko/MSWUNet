@@ -21,10 +21,10 @@ pmode = "detection"
 
 # Data config
 patch_t = 116
-patch_f = 1024
+patch_f = 256
 overlap_pct = 0.02
 tchans = 116
-fchans = 1024
+fchans = 256
 df = 7.450580597
 dt = 10.200547328
 fch1 = None
@@ -54,7 +54,12 @@ stokes_mode = "I"
 # YY_dir = "/data/Raid0/obs_data/33exoplanets/yy/"
 XX_dir = "./data/33exoplanets/xx/"
 YY_dir = "./data/33exoplanets/yy/"
-Beam = [1, 10]
+Beam = [1, 14, 3, 7, 15]
+# Beam = [8, 16, 4, 9, 17]
+# Beam = [10, 18, 5, 11, 19]
+# Beam = [12, 2, 6, 13]
+# Beam = [1, 10]
+# Beam = [4]
 # Beam = None
 
 # Observation data
@@ -67,21 +72,20 @@ obs_file_path = "data/33exoplanets/yy/Kepler-438_M01_pol2_f1139.58-1142.31.fil"
 obs_file_path = [XX_dir, YY_dir] if ignore_polarization else obs_file_path
 
 # Prediction config
-RAW = True
+RAW = False
 batch_size = 1  # ⚠️Fixed to 1 for now, cannot use batch_size > 1, which will break the data.
 num_workers = 0
 pred_dir = "./pred_results"
 pred_steps = 1000
-# dwtnet_ckpt = Path("./checkpoints/mswunet/bin1024") / "best_model_t3_smaller_hid_f64_n5_locateerror.pth"
-dwtnet_ckpt = Path("./checkpoints/mswunet/bin1024") / "best_model.pth"
-# dwtnet_ckpt = Path("./archived/weights/20250925_33e_det_realbk_none.pth")
+# dwtnet_ckpt = Path("./checkpoints/mswunet/bin1024") / "best_model.pth"
+dwtnet_ckpt = Path("./checkpoints/mswunet/bin256") / "best_model.pth"
 unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 P = 2
 
 # NMS config
 nms_kargs = dict(
-    iou_thresh=0.2,
-    score_thresh=0.35)
+    iou_thresh=1.,
+    score_thresh=0.)
 if pmode == 'yolo':
     nms_kargs['top_k'] = None
 
@@ -102,7 +106,7 @@ dedrift_args = dict(
 # Model config
 dim = 64
 levels = [2, 4, 8, 16]
-feat_channels = 96 # 64
+feat_channels = 64
 dwtnet_args = dict(
     in_chans=1,
     dim=dim,
@@ -111,7 +115,7 @@ dwtnet_args = dict(
     extension_mode='periodization')
 detector_args = dict(
     fchans=fchans,
-    N=10,
+    N=5,
     num_classes=2,
     feat_channels=feat_channels,
     dropout=0.005)
@@ -155,14 +159,21 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
             matched_groups (sorted), unmatched (sorted)
         """
         from collections import defaultdict
+
         groups = defaultdict(list)
         unmatched = []
+
         if M_list is not None:
             # Convert [8,10] -> ["M08","M10"]
-            allowed_M = {f"M{m:02d}" for m in M_list}
-            print(f"[\033[32mInfo\033[0m] Selected beams: {sorted(allowed_M)}")
+            allowed_M = [f"M{m:02d}" for m in M_list]
+            allowed_M_set = set(allowed_M)
+            # Priority map: lower index = higher priority
+            M_priority = {m: i for i, m in enumerate(allowed_M)}
+            print(f"[\033[32mInfo\033[0m] Selected beams (ordered): {allowed_M}")
         else:
             allowed_M = None
+            allowed_M_set = None
+            M_priority = None
             print("[\033[32mInfo\033[0m] No beam filtering applied.")
 
         for file_path in files:
@@ -171,13 +182,15 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
             if "_pol" not in stem:
                 unmatched.append(str(file_path))
                 continue
+
             try:
                 parts = stem.split("_")
                 beam_name = next(p for p in parts if p.startswith("M") and len(p) == 3)
             except StopIteration:
                 unmatched.append(str(file_path))
                 continue
-            if allowed_M is not None and beam_name not in allowed_M:
+
+            if allowed_M_set is not None and beam_name not in allowed_M_set:
                 continue
 
             base = stem.split("_pol")[0]
@@ -190,8 +203,13 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
             else:
                 unmatched.extend(group)
 
-        matched_groups = sorted(matched_groups, key=lambda x: int(x[0][1:]))
+        if M_priority is not None:
+            matched_groups = sorted(matched_groups, key=lambda x: M_priority[x[0]])
+        else:
+            matched_groups = sorted(matched_groups, key=lambda x: int(x[0][1:]))
+
         matched_groups = [g for (_, g) in matched_groups]
+
         return matched_groups, sorted(unmatched)
 
     def load_model(model_class, checkpoint_path, **kwargs):
