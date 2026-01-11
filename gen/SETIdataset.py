@@ -80,15 +80,18 @@ class DynamicSpectrumDataset(Dataset):
         return 10 ** 9  # 虚拟一个很大的长度
 
     def __getitem__(self, idx):
+        fixed_path = ['sine','constant']
+        FIXED = False
         # 随机生成信号列表
         n_signals = random.randint(self.num_signals[0], self.num_signals[1])
         if np.random.random() < 0.3:
             n_signals += 1  # 30% 的概率增加一个SETI信号
-
         if np.random.random() < 0.1:  # 10% 的概率不生成任何信号
             n_signals = 0
+        if FIXED:
+            n_signals = len(fixed_path)
 
-        # 生成判据
+            # 生成判据
         if self.mode == 'test' or self.mode == 'mask':
             if n_signals == 0:
                 phy_prob = 0.
@@ -102,6 +105,8 @@ class DynamicSpectrumDataset(Dataset):
             # 随机路径类型
             path_type = random.choices(['constant', 'sine', 'squared', 'rfi'],
                                        weights=[0.6, 0., 0.4, 0.])[0]
+            if FIXED:
+                path_type = fixed_path[i]
 
             def _truncated_normal(a, b, mean=0.0, std=1.2):
                 lower = (a - mean) / std
@@ -154,10 +159,10 @@ class DynamicSpectrumDataset(Dataset):
 
             # 路径类型特定参数
             if path_type == 'sine':
-                sig['period'] = random.uniform(1.25 * self.total_time, 2.5 * self.total_time)
+                sig['period'] = random.uniform(0.25 * self.total_time, 0.75 * self.total_time)
                 sig['amplitude'] = random.uniform(0.01 * self.total_bandwidth,
                                                   0.03 * self.total_bandwidth) * random.choice([1, -1])
-                sig['drift_rate'] = random.uniform(0.01, 0.25) * drift_rate
+                sig['drift_rate'] = random.uniform(1, 1.5) * drift_rate
             elif path_type == 'rfi':
                 sig['spread'] = random.uniform(0.005 * self.total_bandwidth, 0.05 * self.total_bandwidth)
                 sig['spread_type'] = random.choice(['uniform', 'normal'])
@@ -187,13 +192,13 @@ class DynamicSpectrumDataset(Dataset):
 
         # 随机 RFI 配置
         rfi_params = {
-            'NBC': np.random.randint(1, self.fchans // 128),
-            'NBC_amp': np.random.uniform(1, 25),
-            'NBT': np.random.randint(1, self.tchans // 16 + 1),
-            'NBT_amp': np.random.uniform(1, 50),
-            'BBT': np.random.randint(1, self.fchans // 256 + 1),
-            'BBT_amp': np.random.uniform(1, 25),
-            'LowDrift': np.random.randint(1, 10),
+            # 'NBC': np.random.randint(1, self.fchans // 128),
+            'NBC_amp': np.random.uniform(1, 50),
+            # 'NBT': np.random.randint(1, self.tchans // 16 + 1),
+            'NBT_amp': np.random.uniform(1, 100),
+            # 'BBT': np.random.randint(3, self.tchans // 50 + 2),
+            'BBT_amp': np.random.uniform(1, 50),
+            # 'LowDrift': np.random.randint(1, 10),
             'LowDrift_amp_factor': np.random.uniform(0.1, 1.0),
             'LowDrift_width': np.random.uniform(7.5, 15)
         }
@@ -488,7 +493,7 @@ if __name__ == "__main__":
                                      snr_min=30.0, snr_max=50.0, width_min=7.5, width_max=20, num_signals=(1, 1),
                                      noise_std_min=0.025, noise_std_max=0.05, noise_mean_min=2, noise_mean_max=3,
                                      noise_type='chi2', use_fil=True,
-                                     background_fil="../data/33exoplanets/yy/Kepler-438_M01_pol2_f1139.58-1142.31.fil")
+                                     background_fil="../data/33exoplanets/xx/Kepler-438_M01_pol1_f1140.50-1140.70.fil")
 
     """
     参数生成 Refs:
@@ -504,5 +509,5 @@ if __name__ == "__main__":
     """
 
     # plot_samples(dataset, kind='clean', num=100, with_spectrum=True, spectrum_type='mean')
-    plot_samples(dataset, kind='noisy', num=100, with_spectrum=True, spectrum_type='fft2d')
+    plot_samples(dataset, kind='noisy', num=30, with_spectrum=True, spectrum_type='fft2d')
     # plot_samples(dataset, kind='mask', num=30, with_spectrum=False)

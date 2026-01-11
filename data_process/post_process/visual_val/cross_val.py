@@ -1,15 +1,10 @@
-import os
-import sys
 from pathlib import Path
-
-from data_process.post_process.ML import load_ML_dat
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
-from external.Waterfall import Waterfall
 
 import matplotlib.pyplot as plt
 import torch
+
+from ML import load_ML_dat
+from external.Waterfall import Waterfall
 from utils.det_utils import decode_F, plot_F_lines
 
 

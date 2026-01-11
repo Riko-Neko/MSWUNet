@@ -20,6 +20,10 @@ What it does:
        beam_id : integer parsed from "_Mxx" (e.g., M01 -> 1)
        csv_id  : original CSV filename
    - One group stats CSV: counts per group at each stage
+
+Stitching directory support:
+- If input folder contains "case_summary.csv", treat it as a stitching directory:
+  - Only process this single file (case_summary.csv) for threshold filtering.
 """
 
 import argparse
@@ -36,9 +40,10 @@ PIPELINE_COLUMNS = [
     "cell_row", "cell_col", "gSNR", "freq_min", "freq_max", "time_start", "time_end", "mode"
 ]
 DEFAULT_INPUT_FOLDER = './filter_workflow/init'
+# DEFAULT_INPUT_FOLDER = './filter_workflow/stitching/20260111_175621_f1050-1450_bandonly_overlap0.2_tol7.5e-06_IoU0.5_skipCrowded'
 FREQ_MIN_MHZ = 1050.0
 FREQ_MAX_MHZ = 1450.0
-THRESH_CONFIDENCE = 0.8
+THRESH_CONFIDENCE = 0.7
 THRESH_GSNR = 500.0
 THRESH_SNR = 10.0
 
@@ -134,9 +139,11 @@ def build_param_mask(df: pd.DataFrame) -> pd.Series:
     return (conf >= THRESH_CONFIDENCE) & (gsnr >= THRESH_GSNR) & (snr >= THRESH_SNR)
 
 
-def make_output_dir(base: Path) -> Path:
+def make_output_dir(base: Path, stitching_mode: bool) -> Path:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     tag = f"{ts}_f{int(FREQ_MIN_MHZ)}-{int(FREQ_MAX_MHZ)}_conf{THRESH_CONFIDENCE}_gSNR{int(THRESH_GSNR)}_SNR{int(THRESH_SNR)}"
+    if stitching_mode:
+        tag = f"{tag}_stitching"
     out_dir = base / "filter_workflow" / "events" / tag
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
@@ -152,7 +159,15 @@ def main():
     if not in_dir.exists():
         raise FileNotFoundError(f"Input directory does not exist: {in_dir}")
 
-    csv_files = sorted([p for p in in_dir.iterdir() if p.is_file() and p.suffix.lower() == ".csv"])
+    # Stitching directory detection
+    case_summary_path = in_dir / "case_summary.csv"
+    stitching_mode = case_summary_path.is_file()
+
+    if stitching_mode:
+        csv_files = [case_summary_path]
+    else:
+        csv_files = sorted([p for p in in_dir.iterdir() if p.is_file() and p.suffix.lower() == ".csv"])
+
     if not csv_files:
         print(f"[\033[32mInfo\033[0m] No CSV files found in: {in_dir}")
         return
@@ -176,7 +191,7 @@ def main():
     print("[INFO] Total groups   :", len(groups))
 
     # Prepare output dir
-    out_dir = make_output_dir(Path.cwd())
+    out_dir = make_output_dir(Path.cwd(), stitching_mode=stitching_mode)
     print("\n==============================")
     print("[\033[32mInfo\033[0m] OUTPUT")
     print("==============================")
@@ -208,14 +223,23 @@ def main():
 
         # Add to merged summary
         if n_out > 0:
-            df_out.insert(0, "csv_id", csv_id)
-            df_out.insert(0, "beam_id", beam_id if beam_id is not None else pd.NA)
-            df_out.insert(0, "group_id", group_id)
+            # In stitching mode, case_summary.csv already contains (group_id, beam_id, csv_id) per-row.
+            # Keep original behavior for normal mode; for stitching mode, only add missing meta cols if absent.
+            if "csv_id" not in df_out.columns:
+                df_out.insert(0, "csv_id", csv_id)
+            if "beam_id" not in df_out.columns:
+                df_out.insert(0, "beam_id", beam_id if beam_id is not None else pd.NA)
+            if "group_id" not in df_out.columns:
+                df_out.insert(0, "group_id", group_id)
+
             merged_rows.append(df_out)
 
         # Collect stats
+        stats_group_id = "stitching" if stitching_mode else group_id
+        stats_beam_id = "" if stitching_mode else (beam_id if beam_id is not None else "")
+
         stats_rows.append(
-            {"group_id": group_id, "csv_id": csv_id, "beam_id": beam_id if beam_id is not None else "",
+            {"group_id": stats_group_id, "csv_id": csv_id, "beam_id": stats_beam_id,
              "rows_total": n_total, "rows_in_band": n_freq, "rows_after_thresholds": n_out})
 
         # print(f"[FILE] {csv_id} | total={n_total} | in_band={n_freq} | kept={n_out}")

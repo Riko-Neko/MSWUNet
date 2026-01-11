@@ -10,7 +10,8 @@ from torch.utils.data import DataLoader
 from utils.det_utils import decode_F, plot_F_lines, extract_F_slice
 from utils.metrics_utils import SNR_filter
 
-DEBUG = True
+DEBUG = False
+PRODUCTION = False
 
 
 def _process_batch_core(model, batch, device, mode, *args):
@@ -260,39 +261,70 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
 
             # Create figure with subplots
             figlen = 9 if freq_frames <= 512 else 14
-            fig, axs = plt.subplots(3, 1, figsize=(figlen, 9))
+            if not PRODUCTION:
+                fig, axs = plt.subplots(3, 1, figsize=(figlen, 9))
+            else:
+                import matplotlib as mpl
+                mpl.rcParams['font.family'] = 'Times New Roman'
+                mpl.rcParams['font.size'] = 25
+                mpl.rcParams['font.weight'] = 'semibold'
+                mpl.rcParams['axes.titleweight'] = 'bold'
+                mpl.rcParams['axes.labelweight'] = 'bold'
+                fig, axs = plt.subplots(2, 1, figsize=(figlen, 14))
 
-            def plot_spec(ax, data, title, cmap='viridis', boxes=None, normalized=False, snrs=None,
-                          color=['red', 'green'], linestyle='--', linewidth=2):
+            def plot_spec(ax, data, title, cmap='viridis', boxes=None, normalized=False,
+                          snrs=None, color=['red', 'green'], linestyle='--', linewidth=2):
                 """Helper function to plot spectrum data with optional boxes"""
-                im = ax.imshow(data, aspect='auto', origin='lower',
-                               extent=[freq_axis[0], freq_axis[-1], time_axis[0], time_axis[-1]], cmap=cmap)
+                if PRODUCTION:
+                    y0, y1 = time_axis[0] * dt, time_axis[-1] * dt
+                    ylabel = "Time (s)"
+                else:
+                    y0, y1 = time_axis[0], time_axis[-1]
+                    ylabel = "Time Frame"
+                im = ax.imshow(data, aspect='auto', origin='lower', extent=[freq_axis[0], freq_axis[-1], y0, y1],
+                               cmap=cmap)
                 ax.set_title(title)
-                ax.set_ylabel("Time Frame")
-                fig.colorbar(im, ax=ax, label="Intensity")
+                ax.set_ylabel(ylabel)
+                if not PRODUCTION:
+                    fig.colorbar(im, ax=ax, label="Intensity")
                 if boxes is not None:
                     plot_F_lines(ax, freq_axis, boxes, normalized=normalized, snrs=snrs, color=color,
                                  linestyle=linestyle, linewidth=linewidth)
 
-            # Plot all components
-            plot_spec(axs[0], clean_spec if clean_spec is not None else np.zeros_like(noisy_spec),
-                      "Clean Spectrum")
-            plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis',
-                      boxes=gt_boxes_tuple if gt_boxes_tuple is not None else pred_boxes_tuple,
-                      normalized=True, snrs=snr_vals)
-            plot_spec(axs[2], denoised_spec, "Denoised Spectrum", cmap='viridis', boxes=pred_boxes_tuple,
-                      normalized=True)
-            axs[2].text(0.98, 0.95, f"SNR={SNR_est:.2f}", transform=axs[2].transAxes, ha='right', va='top', fontsize=12,
-                        bbox=dict(facecolor='white', alpha=0.7))
+            if not PRODUCTION:
+                plot_spec(axs[0], clean_spec if clean_spec is not None else np.zeros_like(noisy_spec), "Clean Spectrum")
+                plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis',
+                          boxes=gt_boxes_tuple if gt_boxes_tuple is not None else pred_boxes_tuple, normalized=True,
+                          snrs=snr_vals)
+                plot_spec(axs[2], denoised_spec, "Denoised Spectrum", cmap='viridis', boxes=pred_boxes_tuple,
+                          normalized=True)
 
-            axs[-1].set_xlabel("Frequency Channel")
-            plt.tight_layout()
+                axs[2].text(0.98, 0.95, f"SNR={SNR_est:.2f}", transform=axs[2].transAxes, ha='right', va='top',
+                            fontsize=12, bbox=dict(facecolor='white', alpha=0.7))
+
+                axs[-1].set_xlabel("Frequency Channel")
+                plt.tight_layout()
+
+            else:
+                plot_spec(axs[0], noisy_spec, "Simulated Noisy Spectrogram", cmap='viridis',
+                          boxes=gt_boxes_tuple if gt_boxes_tuple is not None else pred_boxes_tuple, normalized=True,
+                          snrs=snr_vals, color=['red', 'yellow'])
+                plot_spec(axs[1], denoised_spec, "Cleaned Map", cmap='viridis', boxes=pred_boxes_tuple,
+                          normalized=True, color=['red', 'yellow'])
+
+                axs[1].text(0.98, 0.95, f"Global SNR={SNR_est:.2f}", transform=axs[1].transAxes, ha='right', va='top',
+                            fontsize=22, bbox=dict(facecolor='white', alpha=0.7))
+
+                axs[-1].set_xlabel("Frequency Channel")
+                plt.tight_layout()
+
 
         else:
             raise ValueError(f"Unsupported mode: {mode}")
 
         # Save figure
-        plot_path = plot_dir / f"pred_{idx:04d}.png"
+        # if mode == 'detection' and 0 in classes and 1 in classes:
+        plot_path = plot_dir / f"pred_{idx:04d}.png" if not PRODUCTION else plot_dir / f"pred_{idx:04d}.pdf"
         plt.savefig(plot_path, dpi=480, bbox_inches='tight')
         plt.close()
         print(f"[\033[32mInfo\033[0m] Saved plot: {plot_path}")

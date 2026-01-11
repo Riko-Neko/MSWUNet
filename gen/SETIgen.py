@@ -132,11 +132,13 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
     elif not isinstance(fch1, u.Quantity):
         fch1 = fch1 * u.Hz
 
+    fil_flag = False
     if waterfall_itr:
         waterfall = next(waterfall_itr)
         # 创建 Frame (使用背景噪声)
         frame = stg.Frame(waterfall)
         clean_spec = np.zeros_like(frame.data)
+        fil_flag = True
     else:
         # 创建 Frame
         frame = stg.Frame(fchans=fchans, tchans=tchans, df=df, dt=dt, fch1=fch1, ascending=ascending)
@@ -294,7 +296,9 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
 
     # 注入传统 RFI
     if rfi_params and np.random.random() < 0.5:
-        noisy_spec, traditional_rfi_mask = add_rfi(frame.get_data(db=False).copy(), rfi_params, noise_x_std * 0.25)
+    # if rfi_params:
+        noisy_spec, traditional_rfi_mask = add_rfi(np.copy(frame.get_data(db=False)), rfi_params, noise_x_std * 0.25,
+                                                   fil_flag)
         if mode == 'mask' or mode == 'test':
             rfi_mask |= traditional_rfi_mask
     else:

@@ -36,7 +36,7 @@ snr_min = 15
 snr_max = 35
 width_min = 10
 width_max = 30
-num_signals = (0, 1)
+num_signals = (1, 1)
 noise_std_min = 0.025
 noise_std_max = 0.05
 noise_mean_min = 2
@@ -66,8 +66,10 @@ Beam = [1, 14, 3, 7, 15]
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil"
-obs_file_path = "data/33exoplanets/yy/Kepler-438_M01_pol2_f1139.58-1142.31.fil"
-# obs_file_path = "./data/33exoplanets/xx/HD-180617_M04_pol1_f1400.00-1410.00.fil"
+obs_file_path = "data/33exoplanets/xx/Kepler-438_M01_pol1_f1140.50-1140.70.fil"
+# obs_file_path = "data/33exoplanets/yy/Kepler-438_M01_pol2_f1140.50-1140.70.fil"
+# obs_file_path = "./data/33exoplanets/xx/HD-180617_M04_pol1_f1404.00-1404.10.fil"
+# obs_file_path = "./data/33exoplanets/yy/HD-180617_M04_pol2_f1404.00-1404.10.fil"
 # obs_file_path = './data/33exoplanets/'
 obs_file_path = [XX_dir, YY_dir] if ignore_polarization else obs_file_path
 
@@ -76,16 +78,17 @@ RAW = False
 batch_size = 1  # ⚠️Fixed to 1 for now, cannot use batch_size > 1, which will break the data.
 num_workers = 0
 pred_dir = "./pred_results"
-pred_steps = 1000
+pred_steps = 9999999
 # dwtnet_ckpt = Path("./checkpoints/mswunet/bin1024") / "best_model.pth"
-dwtnet_ckpt = Path("./checkpoints/mswunet/bin256") / "best_model.pth"
+dwtnet_ckpt = Path("./checkpoints/mswunet/bin256") / "final.pth"
+# dwtnet_ckpt = Path("./checkpoints/mswunet/bin256") / "case_model.pth"
 unet_ckpt = Path("./checkpoints/unet") / "best_model.pth"
 P = 2
 
 # NMS config
 nms_kargs = dict(
-    iou_thresh=1.,
-    score_thresh=0.)
+    iou_thresh=0.,
+    score_thresh=0.5)
 if pmode == 'yolo':
     nms_kargs['top_k'] = None
 

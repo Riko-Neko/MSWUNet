@@ -29,8 +29,18 @@ import pandas as pd
 #     "./filter_workflow/events/20260103_190203_f1050-1450_conf0.8_gSNR1500_SNR10/total/total_f1050-1450_conf0.8_gSNR1500_SNR10.csv")
 # DEFAULT_INPUT_TOTAL_CSV = (
 #     "./filter_workflow/events/20260103_192202_f1050-1450_conf0.8_gSNR1000_SNR10/total/total_f1050-1450_conf0.8_gSNR1000_SNR10.csv")
+# DEFAULT_INPUT_TOTAL_CSV = (
+#     "./filter_workflow/events/20260103_194509_f1050-1450_conf0.8_gSNR500_SNR10/total/total_f1050-1450_conf0.8_gSNR500_SNR10.csv")
+# DEFAULT_INPUT_TOTAL_CSV = (
+#     "./filter_workflow/events/20260104_021229_f1050-1450_conf0.7_gSNR1500_SNR8/total/total_f1050-1450_conf0.7_gSNR1500_SNR8.csv")
+# DEFAULT_INPUT_TOTAL_CSV = (
+#     "./filter_workflow/events/20260104_171956_f1050-1450_conf0.7_gSNR500_SNR10/total/total_f1050-1450_conf0.7_gSNR500_SNR10.csv")
+# DEFAULT_INPUT_TOTAL_CSV = (
+#     "./filter_workflow/events/20260105_134643_f1050-1450_conf0.8_gSNR1000_SNR5/total/total_f1050-1450_conf0.8_gSNR1000_SNR5.csv")
+# DEFAULT_INPUT_TOTAL_CSV = (
+#     "./filter_workflow/events/20260108_165002_f1050-1450_conf0.7_gSNR1000_SNR10/total/total_f1050-1450_conf0.7_gSNR1000_SNR10.csv")
 DEFAULT_INPUT_TOTAL_CSV = (
-    "./filter_workflow/events/20260103_194509_f1050-1450_conf0.8_gSNR500_SNR10/total/total_f1050-1450_conf0.8_gSNR500_SNR10.csv")
+    "./filter_workflow/events/20260111_181253_f1050-1450_conf0.7_gSNR500_SNR10_stitching/total/total_f1050-1450_conf0.7_gSNR500_SNR10.csv")
 OUTPUT_ROOT = "./filter_workflow/candidates"
 
 ON_BEAM_ID = 1
@@ -40,7 +50,7 @@ TOL_MULTIPLIER = 3.0
 
 # Convert tolerance (Hz) -> MHz: 1 MHz = 1e6 Hz
 TOL_HZ = DELTA_NU_HZ * TOL_MULTIPLIER
-TOL_MHZ = TOL_HZ * 1e-6  # 22.5 Hz -> 2.25e-5 MHz
+TOL_MHZ = TOL_HZ * 1e-6
 
 
 def ensure_numeric(series: pd.Series) -> pd.Series:

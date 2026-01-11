@@ -9,6 +9,7 @@ __pycache__/
 checkpoints/*/*.pth
 checkpoints/*/*/*.pth
 *.png
+*.pdf
 *.h5
 *.csv
 *.fil

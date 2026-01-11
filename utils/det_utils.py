@@ -4,7 +4,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-DEBUG = True
+DEBUG = False
+PRODUCTION = False
 
 
 def decode_F(out: Dict[str, torch.Tensor], iou_thresh: float = 0.5, score_thresh: float = 0.2,
@@ -283,5 +284,6 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, snrs=None, color=['red'
         ax.axvline(freqs[e_idx], color=col, linestyle=linestyle, linewidth=linewidth, alpha=0.8)
         if snrs is not None:
             y_min, y_max = ax.get_ylim()
-            ax.text(freqs[s_idx], y_max * 0.1, round(get_snr(i), 2), ha='center', va='bottom', fontsize=12,
-                    color='black', bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))
+            ax.text(freqs[s_idx], y_max * 0.1, round(get_snr(i), 2), ha='center', va='bottom',
+                    fontsize=22 if PRODUCTION else 12, color='black',
+                    bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))
