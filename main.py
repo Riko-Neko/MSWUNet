@@ -5,6 +5,7 @@ Use "
 find . -type f -name "*.png" \
   | grep -v "^./abandoned/" \
   | grep -v "^./archived/" \
+  | grep -v "^./data_process/post_process/" \
   | sort \
   | awk -F/ '
     {
@@ -35,7 +36,7 @@ from torch.utils.data import DataLoader
 from torchinfo import summary
 
 from gen.SETIdataset import DynamicSpectrumDataset
-from model.DetDWTNet import DWTNet
+from model.DetMSWNet import MSWNet
 from model.utils.Regressor1D import FreqRegressionDetector
 from utils.loss_func import DetectionCombinedLoss, MaskCombinedLoss
 from utils.train_core import train_model
@@ -184,11 +185,11 @@ def main():
 
     # Loss function and optimizer
     if mode == "detection":
-        model = DWTNet(**dwtnet_args, **detector_args)
+        model = MSWNet(**dwtnet_args, **detector_args)
         # model = UNet(**unet_args)
         criterion = DetectionCombinedLoss(**regress_loss_args)
     else:  # "mask" as default
-        model = DWTNet(**dwtnet_args)
+        model = MSWNet(**dwtnet_args)
         # model = UNet(**unet_args)
         criterion = MaskCombinedLoss(device, **mask_loss_args)
 

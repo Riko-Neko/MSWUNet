@@ -1,4 +1,5 @@
 import random
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -7,7 +8,10 @@ import numpy as np
 import setigen as stg
 from astropy import units as u
 
-from utils.det_utils import plot_F_lines
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from config.settings import Settings
 
 try:
     matplotlib.use('MacOSX')
@@ -15,6 +19,7 @@ except:
     pass
 import matplotlib.pyplot as plt
 from gen.FRIgen import add_rfi
+from utils.det_utils import plot_F_lines
 
 
 def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, signals=None, noise_x_mean=0.0,
@@ -296,7 +301,7 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
 
     # 注入传统 RFI
     if rfi_params and np.random.random() < 0.5:
-    # if rfi_params:
+        # if rfi_params:
         noisy_spec, traditional_rfi_mask = add_rfi(np.copy(frame.get_data(db=False)), rfi_params, noise_x_std * 0.25,
                                                    fil_flag)
         if mode == 'mask' or mode == 'test':
@@ -306,44 +311,122 @@ def sim_dynamic_spec_seti(fchans, tchans, df, dt, fch1=None, ascending=False, si
 
     # 可视化（可选）
     if plot:
-        plt.figure(figsize=(24, 12))
-        if ascending:
-            freqs = fch1.to(u.Hz).value + np.arange(fchans) * df.to(u.Hz).value
+        if not Settings.PROD:
+            plt.figure(figsize=(24, 12))
+            if ascending:
+                freqs = fch1.to(u.Hz).value + np.arange(fchans) * df.to(u.Hz).value
+            else:
+                freqs = fch1.to(u.Hz).value - np.arange(fchans) * df.to(u.Hz).value
+
+            plt.subplot(221)
+            plt.imshow(clean_spec, aspect='auto', origin='lower',
+                       extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
+            plot_F_lines(plt.gca(), freqs, (len(f_starts), f_starts, f_stops), normalized=False)
+            plt.title('Clean Signal Spectrum')
+            plt.colorbar(label='Intensity')
+
+            plt.subplot(222)
+            plt.imshow(signal_spec, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans],
+                       cmap='viridis')
+            plt.title('Signal Spectrum with Background Noise')
+            plt.colorbar(label='Intensity')
+
+            plt.subplot(223)
+            plt.imshow(noisy_spec, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans],
+                       cmap='viridis')
+            plot_F_lines(plt.gca(), freqs, (len(f_starts), f_starts, f_stops), normalized=False)
+            plt.title('Noisy Spectrum with injected RFI')
+            plt.colorbar(label='Intensity')
+
+            plt.subplot(224)
+            if rfi_mask is None:
+                rfi_mask = np.zeros_like(frame.data, dtype=bool)
+            plt.imshow(rfi_mask, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans], cmap='Reds')
+            plt.title('RFI Mask')
+            plt.xlabel('Frequency (Hz)')
+            plt.ylabel('Time')
+            plt.colorbar(label='RFI presence')
+            plt.tight_layout()
+
+            if plot_filename:
+                out_path = Path(plot_filename)
+                plt.savefig(out_path, dpi=480)
+                print(f"Plot saved to {out_path}")
         else:
-            freqs = fch1.to(u.Hz).value - np.arange(fchans) * df.to(u.Hz).value
+            import matplotlib as mpl
+            mpl.rcParams['font.family'] = 'Times New Roman'
+            mpl.rcParams['font.size'] = 25
+            mpl.rcParams['font.weight'] = 'semibold'
+            mpl.rcParams['axes.titleweight'] = 'bold'
+            mpl.rcParams['axes.labelweight'] = 'bold'
+            fig, axs = plt.subplots(2, 1, figsize=(9, 15.64))
+            t0 = 0.0
+            t1 = (tchans - 1) * dt.to(u.s).value
 
-        plt.subplot(221)
-        plt.imshow(clean_spec, aspect='auto', origin='lower',
-                   extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
-        plot_F_lines(plt.gca(), freqs, (len(f_starts), f_starts, f_stops), normalized=False)
-        plt.title('Clean Signal Spectrum')
-        plt.colorbar(label='Intensity')
+            def _imshow_abs_idx(ax, data2d, x_start, x_stop_excl, title=None):
+                """
+                data2d: (tchans, fchans)
+                x_start/x_stop_excl: absolute freq-channel indices in [0, 461)
+                """
+                sl = data2d[:, x_start:x_stop_excl]
+                ax.imshow(sl, aspect="auto", origin="lower", extent=[x_start, x_stop_excl - 1, t0, t1], )
+                if title is not None:
+                    ax.set_title(title)
+                ax.set_ylabel("Time (s)")
+                ax.set_xlim(x_start, x_stop_excl - 1)
 
-        plt.subplot(222)
-        plt.imshow(signal_spec, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
-        plt.title('Signal Spectrum with Background Noise')
-        plt.colorbar(label='Intensity')
+            _show = noisy_spec
+            axs[0].set_axis_off()
+            subgs = axs[0].get_subplotspec().subgridspec(1, 2, wspace=0.06)  # leave a small seam
+            axL = fig.add_subplot(subgs[0, 0])
+            axR = fig.add_subplot(subgs[0, 1])
+            # left patch: 127~(127+128-1) => [127, 255)
+            L0, L1 = 127, 127 + 128
+            _imshow_abs_idx(axL, _show, L0, L1, title="Patch")
+            # right patch: 205~(205+128-1) => [205, 333)
+            R0, R1 = 205, 205 + 128
+            _imshow_abs_idx(axR, _show, R0, R1, title="Next Patch")
+            mask_w = 51
+            overlay_color = "cyan"
+            overlay_alpha = 0.30
+            axL.axvspan((L1 - mask_w) - 0.5, (L1 - 1) + 0.5, color=overlay_color, alpha=overlay_alpha, lw=0)
+            axL.axvline(signals[0]['f_index'] - 0.5, linestyle="--", linewidth=2, color="yellow")
+            axL.axvline(L1 - 1.5, linestyle="--", linewidth=2, color="yellow")
+            axR.axvspan(R0 - 0.5, (R0 + mask_w - 1) + 0.5, color=overlay_color, alpha=overlay_alpha, lw=0)
+            axR.axvline(f_stop - 0.5, linestyle="--", linewidth=2, color="yellow")
+            axR.axvline(R0 + 0.5, linestyle="--", linewidth=2, color="yellow")
+            # ---- Bottom: 103~358 ----
+            spec_crop = _show[:, 103:359]  # (T, 256)
+            spec_np = spec_crop[None, None, :, :]  # (1, 1, T, 256)
+            from model.DetMSWNet import MSWNet
+            from utils.det_utils import decode_F
+            import torch
+            x = torch.from_numpy(spec_np.copy()).float()
+            model = MSWNet(in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4', extension_mode='periodization',
+                           fchans=256, N=5, num_classes=2, feat_channels=64, dropout=0.005)
+            checkpoint = torch.load("../checkpoints/mswunet/bin256/final.pth", map_location='cpu',
+                                    weights_only=False)
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            model.eval()
+            deno, det_raw = model((x - np.mean(spec_np)) / np.std(spec_np))
+            det_outs = decode_F(det_raw, 0., 0)
+            pred_boxes_tuple = (det_outs["confidence"].shape[1], det_outs["class"][0].cpu().numpy(),
+                                det_outs["f_start"][0].cpu().detach().numpy(),
+                                det_outs["f_end"][0].cpu().detach().numpy())
+            spec_np = deno.detach().cpu().numpy()
+            axs[1].imshow(spec_np[0, 0], aspect="auto", origin="lower", extent=[103, 358, t0, t1])
+            axs[1].set_title("CLeaned Map (Stitched)")
+            axs[1].set_xlabel("Frequency Channel")
+            axs[1].set_ylabel("Time (s)")
+            plot_F_lines(axs[1], np.arange(103, 358), pred_boxes_tuple, normalized=True, color=['red', 'lime'],
+                         linestyle='--', linewidth=3)
+            axR.set_yticks([])
+            axR.set_ylabel("")
+            if plot_filename:
+                out_path = Path(plot_filename)
+                fig.savefig(out_path, dpi=480, bbox_inches="tight")
+                print(f"Plot saved to {out_path}")
 
-        plt.subplot(223)
-        plt.imshow(noisy_spec, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans], cmap='viridis')
-        plot_F_lines(plt.gca(), freqs, (len(f_starts), f_starts, f_stops), normalized=False)
-        plt.title('Noisy Spectrum with injected RFI')
-        plt.colorbar(label='Intensity')
-
-        plt.subplot(224)
-        if rfi_mask is None:
-            rfi_mask = np.zeros_like(frame.data, dtype=bool)
-        plt.imshow(rfi_mask, aspect='auto', origin='lower', extent=[freqs[0], freqs[-1], 0, tchans], cmap='Reds')
-        plt.title('RFI Mask')
-        plt.xlabel('Frequency (Hz)')
-        plt.ylabel('Time')
-        plt.colorbar(label='RFI presence')
-        plt.tight_layout()
-
-        if plot_filename:
-            out_path = Path(plot_filename)
-            plt.savefig(out_path, dpi=480)
-            print(f"Plot saved to {out_path}")
     if mode == 'detection':
         return signal_spec, clean_spec, noisy_spec, (len(f_starts), classes, f_starts, f_stops)
     elif mode == 'mask':
@@ -357,6 +440,7 @@ if __name__ == "__main__":
 
     out_dir = "../plot/sim_raw/"
     os.makedirs(out_dir, exist_ok=True)
+    wf_itr = None
 
     signals = [{
         'f_index': 512,
@@ -390,6 +474,28 @@ if __name__ == "__main__":
         'f_profile': 'gaussian'
     }]
 
+    if Settings.PROD:
+        from blimpy import Waterfall
+
+        fn = '../data/33exoplanets/xx/Ross-128_M01_pol1_f1148.41-1148.42.fil'
+        wf = Waterfall(fn, load_data=False)
+        fch1 = wf.header['fch1']
+        df = wf.header['foff']
+        f_start, f_stop = fch1, fch1 + 461 * df
+        wf_itr = iter([Waterfall(fn, f_stop, f_start)])
+
+        signals = [{
+            'f_index': 165,
+            'drift_rate': 1.0,  # Hz/s
+            'snr': 25,
+            'width': 15,  # Hz
+            'path': 'constant',
+            't_profile': 'sine',
+            's_period': 2,
+            's_amplitude_factor': 0.75,
+            'f_profile': 'gaussian'
+        }]
+
     # RFI配置
     rfi_conf = {
         'NBC': np.random.randint(5, 15),  # 窄带连续RFI
@@ -405,9 +511,11 @@ if __name__ == "__main__":
 
     sim_dynamic_spec_seti(
         fchans=1024,
+        # fchans=461,
         tchans=116,
         df=7.5,
         dt=1.0,
+        # dt=10,
         fch1=1.42e9,
         ascending=True,
         signals=signals,
@@ -418,5 +526,7 @@ if __name__ == "__main__":
         rfi_params=rfi_conf,
         seed=42,
         plot=True,
-        plot_filename=f"{out_dir}/sim_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        # plot_filename=f"{out_dir}/sim_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+        plot_filename=f"{out_dir}/sim_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+        waterfall_itr=wf_itr
     )

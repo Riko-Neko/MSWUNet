@@ -52,12 +52,27 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from blimpy import Waterfall
+from matplotlib.ticker import MaxNLocator
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT))
+
+from config.settings import Settings
 
 # ====== Progress bar (new) ======
 try:
     from tqdm import tqdm  # type: ignore
 except Exception:
     tqdm = None
+
+if Settings.PROD:
+    import matplotlib as mpl
+
+    mpl.rcParams['font.family'] = 'Times New Roman'
+    mpl.rcParams['font.size'] = 12
+    mpl.rcParams['font.weight'] = 'semibold'
+    mpl.rcParams['axes.titleweight'] = 'bold'
+    mpl.rcParams['axes.labelweight'] = 'bold'
 
 
 def progress(iterable, total: int, desc: str):
@@ -82,18 +97,21 @@ def progress(iterable, total: int, desc: str):
 
 
 # ====== Defaults (edit here) ======
-DEFAULT_TARGET_CSV = "../filter_workflow/tmp/1.csv"
+# DEFAULT_TARGET_CSV = "./data_process/post_process/filter_workflow/candidates/20260108_165059_veto_dnu7.5Hz_x3/on_candidates.csv"
+DEFAULT_TARGET_CSV = ROOT / "./data_process/post_process/filter_workflow/tmp/k215519b.csv"
 DEFAULT_YY_DIR = "/data/Raid0/obs_data/33exoplanets/yy/"
 DEFAULT_XX_DIR = "/data/Raid0/obs_data/33exoplanets/xx/"
-DEFAULT_OUTPUT_ROOT = "../filter_workflow/candidates/vis"
+# DEFAULT_YY_DIR = ROOT / "./data/33exoplanets/yy/"
+# DEFAULT_XX_DIR = ROOT / "./data/33exoplanets/xx/"
+DEFAULT_OUTPUT_ROOT = ROOT / "./data_process/post_process/visual_val/visual/vis"
 
 # ====== Window configs ======
-FIXED_W2_MHZ = 0.00096
+FIXED_W2_MHZ = 0.00048
 W3_MHZ = 0.008  # 8 kHz
 
 # save config
-DEFAULT_DPI = 100
-DEFAULT_FMT = "png"
+DEFAULT_DPI = 300
+DEFAULT_FMT = "pdf"
 
 # beam range (for --multi_beam)
 BEAM_MIN = 1
@@ -110,11 +128,11 @@ VMAX_PCT = 98.0
 # Row4:  M09 M03 M04 M13
 # Row5:  M10 M11 M12
 FAST_LAYOUT = [
-    [None, 18, 17, 16, None],
-    [19, 7, 6, 15, None],
+    [18, 17, 16],
+    [19, 7, 6, 15],
     [8, 2, 1, 5, 14],
-    [9, 3, 4, 13, None],
-    [None, 10, 11, 12, None],
+    [9, 3, 4, 13],
+    [10, 11, 12],
 ]
 
 
@@ -202,6 +220,13 @@ def extract_2d_data(wf: Waterfall) -> np.ndarray:
                     return arr2
         return np.squeeze(arr[0])
     raise ValueError(f"Unexpected waterfall data shape: {arr.shape}")
+
+
+def maybe_flip_freq(arr: np.ndarray, wf: Waterfall) -> np.ndarray:
+    hdr = wf.header
+    if hdr.get("foff", -1.0) < 0:
+        return arr[:, ::-1]
+    return arr
 
 
 def get_tsamp_seconds(wf: Waterfall) -> float:
@@ -328,13 +353,7 @@ def plot_mosaic_19beams(
         fmt: str,
         figsize: Tuple[float, float],
 ):
-    """
-    Window fit_width/fixed_width multi-beam mosaic using FAST_LAYOUT (3-4-5-4-3).
-    Shared colorbar, correct axes:
-      X = Frequency (MHz)
-      Y = Time (s)
-    """
-    arrs = [beam_to_arr.get(b) for row in FAST_LAYOUT for b in row if b is not None]
+    arrs = [beam_to_arr.get(b) for row in FAST_LAYOUT for b in row]
     vmin, vmax = robust_vmin_vmax([a for a in arrs if a is not None])
 
     tmax = None
@@ -346,62 +365,76 @@ def plot_mosaic_19beams(
         tmax = 1.0
 
     fig = plt.figure(figsize=figsize)
-    gs = fig.add_gridspec(nrows=5, ncols=5, wspace=0.15, hspace=0.15)
+    gs = fig.add_gridspec(nrows=5, ncols=11, width_ratios=[1] * 10 + [0.22], wspace=0.10, hspace=0.06)
 
     im_for_cbar = None
     axes_for_cbar = []
 
     for r in range(5):
-        for c in range(5):
-            beam = FAST_LAYOUT[r][c]
-            if beam is None:
-                continue
-            ax = fig.add_subplot(gs[r, c])
+        row_beams = FAST_LAYOUT[r]
+        n = len(row_beams)
+        if n == 0:
+            continue
+
+        start = (10 - 2 * n) // 2
+
+        for i, beam in enumerate(row_beams):
+            c0 = start + 2 * i
+            ax = fig.add_subplot(gs[r, c0:c0 + 2])
             axes_for_cbar.append(ax)
 
             arr_tf = beam_to_arr.get(beam)
             if arr_tf is None:
                 ax.text(0.5, 0.5, f"M{beam:02d}\nMissing", ha="center", va="center", transform=ax.transAxes)
-                ax.set_title(f"M{beam:02d}", fontsize=10)
-                ax.set_xlabel("Freq (MHz)")
-                ax.set_ylabel("Time (s)")
                 ax.set_xlim(f_start, f_stop)
                 ax.set_ylim(0.0, tmax)
-                continue
-
-            n_t, _n_f = arr_tf.shape
-            tmax_local = tsamp * n_t
-
-            im = ax.imshow(
-                arr_tf,
-                aspect="auto",
-                origin="lower",
-                extent=[f_start, f_stop, 0.0, tmax_local],
-                vmin=vmin,
-                vmax=vmax,
-            )
-            im_for_cbar = im
-            ax.set_title(f"M{beam:02d}", fontsize=10)
+            else:
+                n_t, _n_f = arr_tf.shape
+                tmax_local = tsamp * n_t
+                im = ax.imshow(
+                    arr_tf,
+                    aspect="auto",
+                    origin="lower",
+                    extent=[f_start, f_stop, 0.0, tmax_local],
+                    vmin=vmin,
+                    vmax=vmax,
+                )
+                im_for_cbar = im
+                ax.text(
+                    0.03, 0.97, f"M{beam:02d}",
+                    transform=ax.transAxes,
+                    ha="left", va="top",
+                    fontsize=12,
+                    color="white",
+                    bbox=dict(boxstyle="round,pad=0.25", facecolor="black", alpha=0.45, linewidth=0),
+                )
 
             if r == 4:
-                ax.set_xlabel("Freq (MHz)")
+                ax.set_xlabel("Freq (MHz)" if i == 1 else "")
+                ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
             else:
                 ax.set_xlabel("")
+                ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
                 ax.tick_params(labelbottom=False)
 
-            if c == 0:
-                ax.set_ylabel("Time (s)")
+            if i == 0:
+                ax.tick_params(labelleft=True)
+                ax.set_ylabel("Time (s)" if r == 2 else "")
             else:
                 ax.set_ylabel("")
                 ax.tick_params(labelleft=False)
 
-    fig.suptitle(title, y=0.99)
+    if not Settings.PROD:
+        fig.suptitle(title, y=0.995)
 
-    if im_for_cbar is not None and axes_for_cbar:
-        cbar = fig.colorbar(im_for_cbar, ax=axes_for_cbar, fraction=0.02, pad=0.02)
+    if im_for_cbar is not None:
+        cax = fig.add_subplot(gs[:, 10])
+        cbar = fig.colorbar(im_for_cbar, cax=cax)
         cbar.set_label("Intensity (arb.)")
 
-    fig.savefig(save_path.with_suffix(f".{fmt}"), dpi=dpi, bbox_inches="tight")
+    fig.subplots_adjust(top=0.965, bottom=0.045, left=0.055, right=0.93)
+
+    fig.savefig(save_path.with_suffix(f".{fmt}"), dpi=dpi)
     plt.close(fig)
 
 
@@ -615,8 +648,8 @@ def main():
                     try:
                         wf_xx = load_waterfall_slice(xx_file, ws, we)
                         wf_yy = load_waterfall_slice(yy_file, ws, we)
-                        arr_xx = extract_2d_data(wf_xx)
-                        arr_yy = extract_2d_data(wf_yy)
+                        arr_xx = maybe_flip_freq(extract_2d_data(wf_xx), wf_xx)
+                        arr_yy = maybe_flip_freq(extract_2d_data(wf_yy), wf_yy)
 
                         t = min(arr_xx.shape[0], arr_yy.shape[0])
                         f = min(arr_xx.shape[1], arr_yy.shape[1])
@@ -693,8 +726,8 @@ def main():
             try:
                 wf_xx = load_waterfall_slice(xx_file, ws, we)
                 wf_yy = load_waterfall_slice(yy_file, ws, we)
-                arr_xx = extract_2d_data(wf_xx)
-                arr_yy = extract_2d_data(wf_yy)
+                arr_xx = maybe_flip_freq(extract_2d_data(wf_xx), wf_xx)
+                arr_yy = maybe_flip_freq(extract_2d_data(wf_yy), wf_yy)
 
                 t = min(arr_xx.shape[0], arr_yy.shape[0])
                 f = min(arr_xx.shape[1], arr_yy.shape[1])

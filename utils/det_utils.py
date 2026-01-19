@@ -1,11 +1,15 @@
+import sys
+from pathlib import Path
 from typing import Dict
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-DEBUG = False
-PRODUCTION = False
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from config.settings import Settings
 
 
 def decode_F(out: Dict[str, torch.Tensor], iou_thresh: float = 0.5, score_thresh: float = 0.2,
@@ -116,7 +120,7 @@ def decode_F(out: Dict[str, torch.Tensor], iou_thresh: float = 0.5, score_thresh
             # Padded parts remain as initialized (0 or -1)
 
     # Debug print
-    if DEBUG:
+    if Settings.DEBUG:
         print(f"[\033[36mDebug\033[0m] Filtering, f_start: {[t.tolist() for t in results['f_start']]}, "
               f"f_end: {[t.tolist() for t in results['f_end']]}, "
               f"class_id: {[t.tolist() for t in results['class']]}, "
@@ -285,5 +289,5 @@ def plot_F_lines(ax, freqs, pred_boxes, normalized=True, snrs=None, color=['red'
         if snrs is not None:
             y_min, y_max = ax.get_ylim()
             ax.text(freqs[s_idx], y_max * 0.1, round(get_snr(i), 2), ha='center', va='bottom',
-                    fontsize=22 if PRODUCTION else 12, color='black',
+                    fontsize=22 if Settings.PROD else 12, color='black',
                     bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))

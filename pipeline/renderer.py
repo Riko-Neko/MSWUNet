@@ -25,7 +25,7 @@ class SETIWaterfallRenderer(QWidget):
 
         Args:
             dataset: SETIDataset instance
-            model: Trained DWTNet model
+            model: Trained MSWNet model
             device: Computation device (e.g., 'cuda' or 'cpu')
             mode: 'mask' or 'detection' - operating mode
             log_dir: Directory for logs

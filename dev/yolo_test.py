@@ -38,7 +38,7 @@ fil_folder = Path('./data/33exoplanets/bk')
 background_fil = list(fil_folder.rglob("*.fil"))
 
 # ----- constants & defaults -----
-CKPT_DIR = Path("./checkpoints/yolo")
+CKPT_DIR = Path("../checkpoints/yolo")
 ckpt_path = CKPT_DIR / "best.pth"
 CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -207,7 +207,7 @@ def main(argv=None):
     if args.predict:
         print("[\033[32mInfo\033[0m] Running predict/inference mode...")
 
-        inference_and_plot(model, val_loader, device, "pred_results/plots/yolo_test", steps=infer_steps,
+        inference_and_plot(model, val_loader, device, "../pred_results/plots/yolo_test", steps=infer_steps,
                            conf_thresh=conf_thresh, iou_threshold=iou_threshold)
         return
 

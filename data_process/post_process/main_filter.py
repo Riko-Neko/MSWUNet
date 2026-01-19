@@ -28,19 +28,23 @@ Stitching directory support:
 
 import argparse
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Tuple, Optional, List
 
 import pandas as pd
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
 # ====== Configs of Pipeline ======
 PIPELINE_COLUMNS = [
     "DriftRate", "SNR", "Uncorrected_Frequency", "freq_start", "freq_end", "class_id", "confidence",
     "cell_row", "cell_col", "gSNR", "freq_min", "freq_max", "time_start", "time_end", "mode"
 ]
-DEFAULT_INPUT_FOLDER = './filter_workflow/init'
-# DEFAULT_INPUT_FOLDER = './filter_workflow/stitching/20260111_175621_f1050-1450_bandonly_overlap0.2_tol7.5e-06_IoU0.5_skipCrowded'
+DEFAULT_INPUT_FOLDER = ROOT / './data_process/post_process/filter_workflow/init'
+# DEFAULT_INPUT_FOLDER = ROOT / './data_process/post_process/filter_workflow/stitching/20260111_175621_f1050-1450_bandonly_overlap0.2_tol7.5e-06_IoU0.5_skipCrowded'
 FREQ_MIN_MHZ = 1050.0
 FREQ_MAX_MHZ = 1450.0
 THRESH_CONFIDENCE = 0.7
@@ -144,7 +148,7 @@ def make_output_dir(base: Path, stitching_mode: bool) -> Path:
     tag = f"{ts}_f{int(FREQ_MIN_MHZ)}-{int(FREQ_MAX_MHZ)}_conf{THRESH_CONFIDENCE}_gSNR{int(THRESH_GSNR)}_SNR{int(THRESH_SNR)}"
     if stitching_mode:
         tag = f"{tag}_stitching"
-    out_dir = base / "filter_workflow" / "events" / tag
+    out_dir = base / "data_process" / "post_process" / "filter_workflow" / "events" / tag
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
 

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-FAST SETI Stitch Case Visualizer (standalone)
+FAST SETI Stitch Case Visualizer
 
 Input:
 - A stitching output directory produced by your stitch script, containing:
@@ -10,7 +10,7 @@ Input:
     <stitch_out_dir>/case_members.csv
     <stitch_out_dir>/stats/case_stats.csv
 
-Output (style aligned with your source-level vis):
+Output:
 <output_root>/<timestamp>/
   case_001_<group>_Mxx/
     <group>_Mxx_typical_case_001_3panel.png
@@ -33,6 +33,7 @@ Notes:
 
 import argparse
 import glob
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List, Any
@@ -41,6 +42,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.patches import Rectangle
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT))
 
 try:
     from blimpy import Waterfall
@@ -52,6 +56,8 @@ try:
     from tqdm import tqdm  # type: ignore
 except Exception:
     tqdm = None
+
+KEY_COL = "case_key"
 
 
 def progress(iterable, total: int, desc: str):
@@ -73,7 +79,7 @@ def progress(iterable, total: int, desc: str):
 # ====== Default Configs======
 DEFAULT_YY_DIR = "/data/Raid0/obs_data/33exoplanets/yy/"
 DEFAULT_XX_DIR = "/data/Raid0/obs_data/33exoplanets/xx/"
-DEFAULT_OUTPUT_ROOT = "../filter_workflow/candidates/stitching_vis"
+DEFAULT_OUTPUT_ROOT = ROOT / "./data_process/post_process/filter_workflow/candidates/stitching_vis"
 
 DEFAULT_DPI = 300
 DEFAULT_FMT = "png"
@@ -90,7 +96,7 @@ MIN_TIME_PAD_S = 1.0
 CASE_FIGSIZE = (20, 10)
 
 # semi-transparent shading to show "this panel is this patch"
-SHADE_ALPHA = 0.25
+SHADE_ALPHA = 0.15
 
 
 def make_timestamp_dir(root: Path) -> Path:
@@ -244,8 +250,17 @@ def shade_other_side(ax, f_start: float, f_stop: float, fb: float, keep_side: st
     else:
         x0, x1 = f_start, fb
     if x1 > x0:
-        ax.add_patch(Rectangle((x0, ax.get_ylim()[0]), x1 - x0, ax.get_ylim()[1] - ax.get_ylim()[0],
-                               facecolor="white", alpha=SHADE_ALPHA, edgecolor="none", zorder=3))
+        ax.add_patch(
+            Rectangle(
+                (x0, ax.get_ylim()[0]),
+                x1 - x0,
+                ax.get_ylim()[1] - ax.get_ylim()[0],
+                facecolor="white",
+                alpha=SHADE_ALPHA,
+                edgecolor="none",
+                zorder=3,
+            )
+        )
 
 
 def plot_case_3panel(arr_tf: np.ndarray, f_start: float, f_stop: float, t0: float, t1: float, vmin: float, vmax: float,
@@ -320,12 +335,13 @@ def build_case_key(df: pd.DataFrame, use_stitched_cols: bool) -> pd.Series:
 
 
 def select_typical_cases(sum_df: pd.DataFrame, mem_df: pd.DataFrame, stats_df: pd.DataFrame,
-                         n_cases: int) -> pd.DataFrame:
+                         n_cases: int, rank_primary: str) -> pd.DataFrame:
     """
     Clean-first:
       - n_members == 2
       - adjacent patches in members: same cell_row, abs(col diff) == 1
-      - rank by: confidence desc, gSNR desc, SNR desc, stitched bandwidth desc
+      - rank_primary can be "gsnr" or "confidence"
+      - tie-breakers: the other one desc, then SNR desc, stitched bandwidth desc
     """
     s = stats_df.copy()
     s = s[s["n_members"] == 2].copy()
@@ -333,24 +349,26 @@ def select_typical_cases(sum_df: pd.DataFrame, mem_df: pd.DataFrame, stats_df: p
         return s
 
     # build keys
-    s["__key"] = build_case_key(s, use_stitched_cols=True)
+    s[KEY_COL] = build_case_key(s, use_stitched_cols=True)
     sum2 = sum_df.copy()
-    sum2["__key"] = build_case_key(sum2, use_stitched_cols=False)
+    sum2[KEY_COL] = build_case_key(sum2, use_stitched_cols=False)
 
-    merged = s.merge(
-        sum2[["__key", "confidence", "gSNR", "SNR", "DriftRate", "Uncorrected_Frequency",
-              "freq_start", "freq_end", "time_start", "time_end", "group_id", "beam_id", "csv_id", "class_id"]],
-        on="__key",
-        how="left"
-    )
+    # Only bring metrics from case_summary to avoid pandas suffixing beam_id -> beam_id_x/beam_id_y
+    sum_metrics = sum2[[
+        KEY_COL,
+        "confidence", "gSNR", "SNR", "DriftRate", "Uncorrected_Frequency",
+        "freq_start", "freq_end", "time_start", "time_end"
+    ]].copy()
+
+    merged = s.merge(sum_metrics, on=KEY_COL, how="left")
 
     # adjacency check via members
     mem2 = mem_df.copy()
-    mem2["__key"] = build_case_key(mem2, use_stitched_cols=True)
+    mem2[KEY_COL] = build_case_key(mem2, use_stitched_cols=True)
 
-    ok_keys = []
-    for key in merged["__key"].tolist():
-        sub = mem2[mem2["__key"] == key]
+    ok_keys: List[str] = []
+    for key in merged[KEY_COL].tolist():
+        sub = mem2[mem2[KEY_COL] == key]
         if len(sub) != 2:
             continue
         rset = sorted(sub["cell_row"].astype(int).unique().tolist())
@@ -361,14 +379,24 @@ def select_typical_cases(sum_df: pd.DataFrame, mem_df: pd.DataFrame, stats_df: p
             continue
         ok_keys.append(key)
 
-    merged = merged[merged["__key"].isin(ok_keys)].copy()
+    merged = merged[merged[KEY_COL].isin(ok_keys)].copy()
     if merged.empty:
         return merged
 
     merged["stitched_bw"] = (merged["freq_end"] - merged["freq_start"]).abs()
 
+    # ---- selectable ranking ----
+    rp = str(rank_primary).strip().lower()
+    if rp not in {"gsnr", "confidence"}:
+        rp = "gsnr"
+
+    if rp == "confidence":
+        sort_by = ["confidence", "gSNR", "SNR", "stitched_bw"]
+    else:
+        sort_by = ["gSNR", "confidence", "SNR", "stitched_bw"]
+
     merged = merged.sort_values(
-        by=["confidence", "gSNR", "SNR", "stitched_bw"],
+        by=sort_by,
         ascending=[False, False, False, False],
     ).head(int(n_cases)).copy()
 
@@ -384,6 +412,8 @@ def main():
     ap.add_argument("--output_root", type=str, default=DEFAULT_OUTPUT_ROOT,
                     help="Output root (timestamp folder will be created inside).")
     ap.add_argument("--n_cases", type=int, default=10, help="Number of typical cases to visualize (default=10).")
+    ap.add_argument("--rank_primary", type=str, default="confidence", choices=["gsnr", "confidence"],
+                    help="Primary ranking metric for typical cases: gsnr or confidence (default=gsnr).")
     ap.add_argument("--dpi", type=int, default=DEFAULT_DPI, help="Figure DPI (default=300).")
     ap.add_argument("--fmt", type=str, default=DEFAULT_FMT, help="Figure format: png/jpg/jpeg/pdf (default=png).")
     args = ap.parse_args()
@@ -428,7 +458,13 @@ def main():
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    picked = select_typical_cases(sum_df, mem_df, stats_df, n_cases=int(args.n_cases))
+    picked = select_typical_cases(
+        sum_df,
+        mem_df,
+        stats_df,
+        n_cases=int(args.n_cases),
+        rank_primary=str(args.rank_primary),
+    )
     if picked.empty:
         print("[\033[32mInfo\033[0m] No eligible typical 2-member adjacent cases found.")
         return
@@ -440,29 +476,32 @@ def main():
 
     # prepare members with key
     mem2 = mem_df.copy()
-    mem2["__key"] = build_case_key(mem2, use_stitched_cols=True)
+    mem2[KEY_COL] = build_case_key(mem2, use_stitched_cols=True)
 
     meta_rows: List[Dict[str, Any]] = []
 
-    for rank, row in enumerate(progress(picked.itertuples(index=False), total=len(picked), desc="Render cases"),
-                               start=1):
-        gid = str(getattr(row, "group_id"))
-        bid = int(getattr(row, "beam_id"))
-        cid = str(getattr(row, "csv_id"))
-        key = str(getattr(row, "__key"))
+    # IMPORTANT: do NOT use itertuples() attribute access for key columns (can be auto-renamed by pandas).
+    for rank, (_i, row) in enumerate(
+            progress(picked.iterrows(), total=len(picked), desc="Render cases"),
+            start=1
+    ):
+        gid = str(row["group_id"])
+        bid = int(row["beam_id"])
+        cid = str(row["csv_id"])
+        key = str(row[KEY_COL])
 
-        conf = float(getattr(row, "confidence"))
-        gsnr = float(getattr(row, "gSNR"))
-        snr = float(getattr(row, "SNR"))
-        drift = float(getattr(row, "DriftRate"))
-        uncorr = float(getattr(row, "Uncorrected_Frequency"))
+        conf = float(row["confidence"])
+        gsnr = float(row["gSNR"])
+        snr = float(row["SNR"])
+        drift = float(row["DriftRate"])
+        uncorr = float(row["Uncorrected_Frequency"])
 
-        f0 = float(getattr(row, "freq_start"))
-        f1 = float(getattr(row, "freq_end"))
-        t0s = float(getattr(row, "time_start"))
-        t1s = float(getattr(row, "time_end"))
+        f0 = float(row["freq_start"])
+        f1 = float(row["freq_end"])
+        t0s = float(row["time_start"])
+        t1s = float(row["time_end"])
 
-        sub = mem2[mem2["__key"] == key].copy()
+        sub = mem2[mem2[KEY_COL] == key].copy()
         if len(sub) != 2:
             continue
 
@@ -493,6 +532,7 @@ def main():
             "group_id": gid,
             "beam_id": bid,
             "csv_id": cid,
+            KEY_COL: key,
             "confidence": conf,
             "gSNR": gsnr,
             "SNR": snr,
@@ -530,10 +570,12 @@ def main():
             vmin, vmax = robust_vmin_vmax(arr_i)
 
             total_seconds = tsamp * arr_i_full.shape[0]
-            l_t0, l_t1 = maybe_convert_time_to_seconds(float(left["time_start"]), float(left["time_end"]), tsamp,
-                                                       total_seconds)
-            r_t0, r_t1 = maybe_convert_time_to_seconds(float(right["time_start"]), float(right["time_end"]), tsamp,
-                                                       total_seconds)
+            l_t0, l_t1 = maybe_convert_time_to_seconds(
+                float(left["time_start"]), float(left["time_end"]), tsamp, total_seconds
+            )
+            r_t0, r_t1 = maybe_convert_time_to_seconds(
+                float(right["time_start"]), float(right["time_end"]), tsamp, total_seconds
+            )
             s_t0, s_t1 = maybe_convert_time_to_seconds(t0s, t1s, tsamp, total_seconds)
 
             left_box = (float(left["freq_start"]), float(left["freq_end"]), l_t0, l_t1)

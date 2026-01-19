@@ -182,7 +182,7 @@ if __name__ == '__main__':
         # dwtnet_ckpt = Path("../../checkpoints/dwtnet") / "best_model.pth"
         dwtnet_ckpt = Path("../../archived/weights/20250925_33e_det_realbk.pth")
 
-        from model.DWTNet import DWTNet
+        from model.MSWNet import MSWNet
 
         dwtnet_args = dict(
             in_chans=1,
@@ -194,7 +194,7 @@ if __name__ == '__main__':
             use_spp=True,
             use_pan=True)
 
-        model = load_model(DWTNet, dwtnet_ckpt, device=device, **dwtnet_args)
+        model = load_model(MSWNet, dwtnet_ckpt, device=device, **dwtnet_args)
 
         mlf = '../../pipeline/log/Kepler-438_M01_pol2_f1120.00-1150.00/hits_20250925_003211.dat'
         # mlf = '../../pipeline/log/HD-180617_M04_pol1_f1400.00-1410.00/hits_20250925_001650.dat'

@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import QApplication
 from torch.utils.data import DataLoader
 
 from gen.SETIdataset import DynamicSpectrumDataset
-from model.DetDWTNet import DWTNet
+from model.DetMSWNet import MSWNet
 from model.UNet import UNet
 from pipeline.patch_engine import SETIWaterFullDataset
 from pipeline.pipeline_processor import SETIPipelineProcessor
@@ -66,7 +66,7 @@ Beam = [1, 14, 3, 7, 15]
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0002.fil"
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000.fil"
 # obs_file_path = "./data/BLIS692NS/BLIS692NS_data/spliced_blc00010203040506o7o0111213141516o7o0212223242526o7o031323334353637_guppi_58060_26569_HIP17147_0021.gpuspec.0000_chunk30720000_part0.fil"
-obs_file_path = "data/33exoplanets/xx/Kepler-438_M01_pol1_f1140.50-1140.70.fil"
+obs_file_path = "data/33exoplanets/xx/tmp/Kepler-438_M01_pol1_f1140.50-1140.70.fil"
 # obs_file_path = "data/33exoplanets/yy/Kepler-438_M01_pol2_f1140.50-1140.70.fil"
 # obs_file_path = "./data/33exoplanets/xx/HD-180617_M04_pol1_f1404.00-1404.10.fil"
 # obs_file_path = "./data/33exoplanets/yy/HD-180617_M04_pol2_f1404.00-1404.10.fil"
@@ -283,14 +283,14 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
         pred_dir = Path(pred_dir) / "dbl"
         print("[\033[32mInfo\033[0m] Running dual-model comparison mode")
         # Load both models
-        dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args, **detector_args)
+        dwtnet = load_model(MSWNet, dwtnet_ckpt, **dwtnet_args, **detector_args)
         unet = load_model(UNet, unet_ckpt)
         # Process the same samples with both models
         for idx, batch in enumerate(pred_dataloader):
             if idx >= pred_steps:
                 break
             print(f"[\033[32mInfo\033[0m] Processing sample {idx + 1}/{pred_steps}")
-            print("[\033[32mInfo\033[0m] Running DWTNet inference...")
+            print("[\033[32mInfo\033[0m] Running MSWNet inference...")
             pred(dwtnet, data_mode='dbl', mode=pmode, data=batch, idx=idx, save_dir=pred_dir, device=device,
                  save_npy=False, plot=True, **nms_kargs)
             print("[\033[32mInfo\033[0m] Running UNet inference...")
@@ -375,7 +375,7 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
                                            ignore_polarization=ignore_polarization, stokes_mode=stokes_mode)
 
             # Load model
-            model = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args, **detector_args)
+            model = load_model(MSWNet, dwtnet_ckpt, **dwtnet_args, **detector_args)
 
             if ui:
                 if RAW:
@@ -405,10 +405,10 @@ def main(mode=None, ui=False, obs=False, verbose=False, device=None, *args):
     else:
         print("[\033[32mInfo\033[0m] Running single-model mode")
         execute0, execute1 = args
-        # --- 推理 DWTNet ---
+        # --- 推理 MSWNet ---
         if execute0:
-            print("[\033[32mInfo\033[0m] Running DWTNet inference...")
-            dwtnet = load_model(DWTNet, dwtnet_ckpt, **dwtnet_args, **detector_args)
+            print("[\033[32mInfo\033[0m] Running MSWNet inference...")
+            dwtnet = load_model(MSWNet, dwtnet_ckpt, **dwtnet_args, **detector_args)
             pred(dwtnet, mode=pmode, data=pred_dataloader, save_dir=pred_dir, device=device, max_steps=pred_steps,
                  save_npy=False, plot=True, group_nms=nms_kargs, group_fsnr=fsnr_args, group_dedrift=dedrift_args)
         # --- 推理 UNet ---

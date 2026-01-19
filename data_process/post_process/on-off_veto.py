@@ -17,12 +17,16 @@ Important:
 """
 
 import argparse
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict
 
 import numpy as np
 import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 
 # ====== Configs ======
 # DEFAULT_INPUT_TOTAL_CSV = (
@@ -40,8 +44,8 @@ import pandas as pd
 # DEFAULT_INPUT_TOTAL_CSV = (
 #     "./filter_workflow/events/20260108_165002_f1050-1450_conf0.7_gSNR1000_SNR10/total/total_f1050-1450_conf0.7_gSNR1000_SNR10.csv")
 DEFAULT_INPUT_TOTAL_CSV = (
-    "./filter_workflow/events/20260111_181253_f1050-1450_conf0.7_gSNR500_SNR10_stitching/total/total_f1050-1450_conf0.7_gSNR500_SNR10.csv")
-OUTPUT_ROOT = "./filter_workflow/candidates"
+        ROOT / "./data_process/post_process/filter_workflow/events/20260111_181253_f1050-1450_conf0.7_gSNR500_SNR10_stitching/total/total_f1050-1450_conf0.7_gSNR500_SNR10.csv")
+OUTPUT_ROOT = ROOT / "./data_process/post_process/filter_workflow/candidates"
 
 ON_BEAM_ID = 1
 
@@ -96,12 +100,8 @@ def has_match_within_tolerance(off_freqs_sorted: np.ndarray, on_freqs: np.ndarra
 def main():
     ap = argparse.ArgumentParser(
         description="On-Off veto using frequency tolerance (3x 7.5 Hz) on Uncorrected_Frequency.")
-    ap.add_argument(
-        "--input_csv",
-        type=str,
-        default=DEFAULT_INPUT_TOTAL_CSV,
-        help="Path to total_*.csv produced by the filter stage (default: edit DEFAULT_INPUT_TOTAL_CSV).",
-    )
+    ap.add_argument("--input_csv", type=str, default=DEFAULT_INPUT_TOTAL_CSV,
+                    help="Path to total_*.csv produced by the filter stage (default: edit DEFAULT_INPUT_TOTAL_CSV).")
     args = ap.parse_args()
 
     in_csv = Path(args.input_csv).expanduser().resolve()

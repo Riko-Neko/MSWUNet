@@ -1,4 +1,4 @@
-# MultiDWTNet
+# Multi Scale Wavelet Net
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch 1.10+](https://img.shields.io/badge/PyTorch-1.10+-orange.svg)](https://pytorch.org)
@@ -52,9 +52,9 @@ repository.
 - **Example working effect**
 
 <p align="center">
-  <img src="pred_results/plots/DWTNet/pred_0000.png" width="30%" />
-  <img src="pred_results/plots/DWTNet/pred_0001.png" width="30%" />
-  <img src="pred_results/plots/DWTNet/pred_0002.png" width="30%" />
+  <img src="pred_results/plots/MSWNet/pred_0000.png" width="30%" />
+  <img src="pred_results/plots/MSWNet/pred_0001.png" width="30%" />
+  <img src="pred_results/plots/MSWNet/pred_0002.png" width="30%" />
 </p>
 *The five-layer visualization includes (from top to bottom): clean simulation, noisy input, interference mask, denoised
 output, and the final generated map.*

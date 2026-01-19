@@ -40,7 +40,7 @@ To use these classes, you can simply import them and create an instance of them
 with the desired parameters. For example:
 
 ```
-from model.DWTNet import DWT2D, IDWT2D, SWT
+from model.MSWNet import DWT2D, IDWT2D, SWT
 
 # Create a DWT2D object with 2 levels of decomposition and the 'db1' wavelet
 dwt = DWT2D(J=2, wave='db1')
@@ -287,7 +287,7 @@ Therefore, please preferably use the wavelet loss function we provide to guide.
 with the desired parameters. For example:
 
 ```
-from model.DWTNet import DWT2DL, IDWT2DL, SWT2DL
+from model.MSWNet import DWT2DL, IDWT2DL, SWT2DL
 
 # Create a DWT2DL object with 2 levels of decomposition and the 'db4' wavelet
 dwt = DWT2DL(wavelet_name='db4', level=2, alpha=50.0)
@@ -309,7 +309,7 @@ class IDWT2DL(nn.Module):
 
 
 """
-Basic blocks for DWTNet.
+Basic blocks for MSWNet.
 """
 
 
@@ -429,14 +429,14 @@ class ConvBlock1D(nn.Module):
 
 
 """
-Main model for DWTNet.
+Main model for MSWNet.
 """
 
 
-class DWTNet(nn.Module):
+class MSWNet(nn.Module):
     def __init__(self, in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4', extension_mode='reflect',
                  fchans=1024, N=5, num_classes=2, feat_channels=64, dropout=0.0):
-        super(DWTNet, self).__init__()
+        super(MSWNet, self).__init__()
         self.level = 1  # Do not change DWT internal level!
         filters = [dim, dim * levels[0], dim * levels[1], dim * levels[2], dim * levels[3]]
 
@@ -561,8 +561,8 @@ if __name__ == '__main__':
     fchans = 1024
 
     if test_mode == 'model':
-        print(f"[\033[32mInfo\033[0m] Testing for DWTNet:")
-        model = DWTNet(in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4', extension_mode='reflect',
+        print(f"[\033[32mInfo\033[0m] Testing for MSWNet:")
+        model = MSWNet(in_chans=1, dim=64, levels=[2, 4, 8, 16], wavelet_name='db4', extension_mode='reflect',
                        fchans=fchans, N=10, num_classes=2, feat_channels=64, dropout=0.0)
         print(model)
 
@@ -600,5 +600,5 @@ if __name__ == '__main__':
         print(f"Input shape: {test_input.shape}")
         print(f"Denoised shape: {denoised.shape}")
         print(f"Detections: {detections}")
-        print(f"[\033[32mInfo\033[0m] Generating summary for DWTNet:")
+        print(f"[\033[32mInfo\033[0m] Generating summary for MSWNet:")
         summary(model, input_size=(1, 1, 116, fchans))

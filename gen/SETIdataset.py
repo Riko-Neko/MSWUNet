@@ -1,5 +1,7 @@
 import os
 import random
+import sys
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -11,7 +13,9 @@ from torch.utils.data import Dataset
 from gen.SETIgen import sim_dynamic_spec_seti
 from utils.det_utils import plot_F_lines
 
-DEBUG = False
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from config.settings import Settings
 
 
 class DynamicSpectrumDataset(Dataset):
@@ -80,7 +84,7 @@ class DynamicSpectrumDataset(Dataset):
         return 10 ** 9  # 虚拟一个很大的长度
 
     def __getitem__(self, idx):
-        fixed_path = ['sine','constant']
+        fixed_path = ['sine', 'constant']
         FIXED = False
         # 随机生成信号列表
         n_signals = random.randint(self.num_signals[0], self.num_signals[1])
@@ -230,7 +234,7 @@ class DynamicSpectrumDataset(Dataset):
         else:
             signal_spec, clean_spec, noisy_spec, rfi_mask, freq_info = sim_dynamic_spec_seti(**args)
 
-        if DEBUG:
+        if Settings.DEBUG:
             print(f"[\033[36mDebug\033[0m] Ground truth boxes to generate: {freq_info}, "
                   f"normalized ({np.array(freq_info[2]) / self.fchans}, {np.array(freq_info[3]) / self.fchans})")
 
@@ -281,7 +285,7 @@ class DynamicSpectrumDataset(Dataset):
                 gt_boxes[:N, 2] = self.t_center
                 gt_boxes[:N, 3] = torch.clamp(f_width, 0.0, 1.0)
                 gt_boxes[:N, 4] = torch.clamp(self.t_width, 0.0, 1.0)
-                if DEBUG:
+                if Settings.DEBUG:
                     print(
                         f"[\033[36mDebug\033[0m] Generated {N} boxes, format [class_id, x_center, y_center, width, height]:\n{gt_boxes}")
             return noisy_spec, clean_spec, gt_boxes

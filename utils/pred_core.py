@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 from typing import Optional, Union
 
@@ -10,8 +11,9 @@ from torch.utils.data import DataLoader
 from utils.det_utils import decode_F, plot_F_lines, extract_F_slice
 from utils.metrics_utils import SNR_filter
 
-DEBUG = False
-PRODUCTION = False
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from config.settings import Settings
 
 
 def _process_batch_core(model, batch, device, mode, *args):
@@ -49,7 +51,7 @@ def _process_batch_core(model, batch, device, mode, *args):
                 clean = batch[1].to(device)
             elif isinstance(batch[1], list):
                 f_min, f_max, start_t, end_t, ascending = args
-                if DEBUG:
+                if Settings.DEBUG:
                     f1, f2 = (f_min, f_max) if ascending else (f_max, f_min)
                     print(
                         f"[\033[36mDebug\033[0m] Extracting from {f1} MHz to {f2} MHz.")
@@ -141,7 +143,7 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
         kwarg_groups["group_fsnr"].pop("fsnr_threshold", None)
         pad_fraction = kwarg_groups["group_fsnr"].pop("pad_fraction", None)
         SNR_est = SNR_filter(results["denoised"][0], **kwarg_groups["group_fsnr"])
-        if DEBUG:
+        if Settings.DEBUG:
             print(f"[\033[36mDebug\033[0m] Estimated SNR={SNR_est:.2f}")
         freq_frames = noisy_spec.shape[1]
         time_frames = denoised_spec.shape[0]
@@ -228,9 +230,9 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
                             print(f"[\033[31mError\033[0m] Failed to estimate SNR for detection: {e}")
                             snr_val = 0.0
                     snr_vals.append(snr_val)
-                    if DEBUG:
+                    if Settings.DEBUG:
                         drift_rates.append(drift_rate)
-                if DEBUG:
+                if Settings.DEBUG:
                     print(f"[\033[36mDebug\033[0m] SNR: {snr_vals}, drift_rate: {drift_rates}")
                 return snr_vals, drift_rates
 
@@ -261,7 +263,7 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
 
             # Create figure with subplots
             figlen = 9 if freq_frames <= 512 else 14
-            if not PRODUCTION:
+            if not Settings.PROD:
                 fig, axs = plt.subplots(3, 1, figsize=(figlen, 9))
             else:
                 import matplotlib as mpl
@@ -275,7 +277,7 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
             def plot_spec(ax, data, title, cmap='viridis', boxes=None, normalized=False,
                           snrs=None, color=['red', 'green'], linestyle='--', linewidth=2):
                 """Helper function to plot spectrum data with optional boxes"""
-                if PRODUCTION:
+                if Settings.PROD:
                     y0, y1 = time_axis[0] * dt, time_axis[-1] * dt
                     ylabel = "Time (s)"
                 else:
@@ -285,13 +287,13 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
                                cmap=cmap)
                 ax.set_title(title)
                 ax.set_ylabel(ylabel)
-                if not PRODUCTION:
+                if not Settings.PROD:
                     fig.colorbar(im, ax=ax, label="Intensity")
                 if boxes is not None:
                     plot_F_lines(ax, freq_axis, boxes, normalized=normalized, snrs=snrs, color=color,
                                  linestyle=linestyle, linewidth=linewidth)
 
-            if not PRODUCTION:
+            if not Settings.PROD:
                 plot_spec(axs[0], clean_spec if clean_spec is not None else np.zeros_like(noisy_spec), "Clean Spectrum")
                 plot_spec(axs[1], noisy_spec, "Noisy Spectrum", cmap='viridis',
                           boxes=gt_boxes_tuple if gt_boxes_tuple is not None else pred_boxes_tuple, normalized=True,
@@ -324,7 +326,7 @@ def _save_batch_results(results, idx, save_dir, model_class_name, mode='detectio
 
         # Save figure
         # if mode == 'detection' and 0 in classes and 1 in classes:
-        plot_path = plot_dir / f"pred_{idx:04d}.png" if not PRODUCTION else plot_dir / f"pred_{idx:04d}.pdf"
+        plot_path = plot_dir / f"pred_{idx:04d}.png" if not Settings.PROD else plot_dir / f"pred_{idx:04d}.pdf"
         plt.savefig(plot_path, dpi=480, bbox_inches='tight')
         plt.close()
         print(f"[\033[32mInfo\033[0m] Saved plot: {plot_path}")
