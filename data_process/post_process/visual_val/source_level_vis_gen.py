@@ -41,11 +41,22 @@ from blimpy import Waterfall
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
+from config.settings import Settings
+
 # ====== tqdm progress bar (new) ======
 try:
     from tqdm import tqdm  # type: ignore
 except Exception:
     tqdm = None
+
+if Settings.PROD:
+    import matplotlib as mpl
+
+    mpl.rcParams['font.family'] = 'Times New Roman'
+    mpl.rcParams['font.size'] = 27
+    mpl.rcParams['font.weight'] = 'semibold'
+    mpl.rcParams['axes.titleweight'] = 'bold'
+    mpl.rcParams['axes.labelweight'] = 'bold'
 
 
 def progress(iterable, total: int, desc: str):
@@ -90,11 +101,11 @@ BEAM_ID = 1  # M01
 FIGSIZE = (20, 8)
 
 # "pol" (XX+YY only), "i" (I only), "all" (XX+YY+I)
-RENDER_MODE = "all"
+RENDER_MODE = "pol"
 
 # ====== Multi-beam switch ======
 # Follow main vis gen pattern: default off; if on, render M01–M19.
-MULTI_BEAM = True
+MULTI_BEAM = False
 BEAM_MIN = 1
 BEAM_MAX = 19
 
@@ -344,7 +355,7 @@ def run_source_level_vis():
 
                             base = f"{gid}_M{beam_id:02d}_fc{fc:.6f}MHz_fixed_width_XX"
                             save_path = out_xx_dir / base
-                            title = f"XX | group={gid} | M{beam_id:02d} | f0={fc:.6f} MHz | fixed_width"
+                            title = f"XX | group={gid} | M{beam_id:02d} | f0={fc:.6f} MHz | fixed_width" if not Settings.PROD else f"{gid} | XX | M{beam_id:02d} | f0={fc:.4f} MHz"
 
                             plot_single_panel(arr_tf=arr_xx, f_start=f_start, f_stop=f_stop, tsamp=tsamp, title=title,
                                               save_path=save_path, dpi=DEFAULT_DPI, fmt=DEFAULT_FMT, figsize=FIGSIZE,
@@ -378,7 +389,7 @@ def run_source_level_vis():
 
                             base = f"{gid}_M{beam_id:02d}_fc{fc:.6f}MHz_fixed_width_YY"
                             save_path = out_yy_dir / base
-                            title = f"YY | group={gid} | M{beam_id:02d} | f0={fc:.6f} MHz | fixed_width"
+                            title = f"YY | group={gid} | M{beam_id:02d} | f0={fc:.6f} MHz | fixed_width" if not Settings.PROD else f"{gid} | YY | M{beam_id:02d} | f0={fc:.4f} MHz"
 
                             plot_single_panel(arr_tf=arr_yy, f_start=f_start, f_stop=f_stop, tsamp=tsamp, title=title,
                                               save_path=save_path, dpi=DEFAULT_DPI, fmt=DEFAULT_FMT, figsize=FIGSIZE,

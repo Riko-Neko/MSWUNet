@@ -52,7 +52,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from blimpy import Waterfall
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import MultipleLocator, MaxNLocator, FormatStrFormatter
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
@@ -69,7 +69,7 @@ if Settings.PROD:
     import matplotlib as mpl
 
     mpl.rcParams['font.family'] = 'Times New Roman'
-    mpl.rcParams['font.size'] = 12
+    mpl.rcParams['font.size'] = 20
     mpl.rcParams['font.weight'] = 'semibold'
     mpl.rcParams['axes.titleweight'] = 'bold'
     mpl.rcParams['axes.labelweight'] = 'bold'
@@ -96,22 +96,23 @@ def progress(iterable, total: int, desc: str):
         return _gen()
 
 
-# ====== Defaults (edit here) ======
+# ====== Defaults configs ======
 # DEFAULT_TARGET_CSV = "./data_process/post_process/filter_workflow/candidates/20260108_165059_veto_dnu7.5Hz_x3/on_candidates.csv"
 DEFAULT_TARGET_CSV = ROOT / "./data_process/post_process/filter_workflow/tmp/k215519b.csv"
-DEFAULT_YY_DIR = "/data/Raid0/obs_data/33exoplanets/yy/"
-DEFAULT_XX_DIR = "/data/Raid0/obs_data/33exoplanets/xx/"
-# DEFAULT_YY_DIR = ROOT / "./data/33exoplanets/yy/"
-# DEFAULT_XX_DIR = ROOT / "./data/33exoplanets/xx/"
+# DEFAULT_TARGET_CSV = ROOT / "./data_process/post_process/filter_workflow/tmp/fp2.csv"
+# DEFAULT_YY_DIR = "/data/Raid0/obs_data/33exoplanets/yy/"
+# DEFAULT_XX_DIR = "/data/Raid0/obs_data/33exoplanets/xx/"
+DEFAULT_YY_DIR = ROOT / "./data/33exoplanets/yy/tmp"
+DEFAULT_XX_DIR = ROOT / "./data/33exoplanets/xx/tmp"
 DEFAULT_OUTPUT_ROOT = ROOT / "./data_process/post_process/visual_val/visual/vis"
 
 # ====== Window configs ======
-FIXED_W2_MHZ = 0.00048
+FIXED_W2_MHZ = 0.0064
 W3_MHZ = 0.008  # 8 kHz
 
 # save config
 DEFAULT_DPI = 300
-DEFAULT_FMT = "pdf"
+DEFAULT_FMT = "png"
 
 # beam range (for --multi_beam)
 BEAM_MIN = 1
@@ -411,10 +412,12 @@ def plot_mosaic_19beams(
 
             if r == 4:
                 ax.set_xlabel("Freq (MHz)" if i == 1 else "")
+                ax.tick_params(labelbottom=True, labelsize=15)
+                ax.xaxis.set_major_formatter(FormatStrFormatter('%.4f'))
                 ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
             else:
                 ax.set_xlabel("")
-                ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
+                ax.xaxis.set_major_locator(MultipleLocator(0.0001))
                 ax.tick_params(labelbottom=False)
 
             if i == 0:
@@ -432,7 +435,7 @@ def plot_mosaic_19beams(
         cbar = fig.colorbar(im_for_cbar, cax=cax)
         cbar.set_label("Intensity (arb.)")
 
-    fig.subplots_adjust(top=0.965, bottom=0.045, left=0.055, right=0.93)
+    fig.subplots_adjust(top=0.965, bottom=0.045, left=0.055, right=0.945)
 
     fig.savefig(save_path.with_suffix(f".{fmt}"), dpi=dpi)
     plt.close(fig)
