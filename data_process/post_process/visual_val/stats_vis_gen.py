@@ -722,7 +722,7 @@ def main():
     # ---- Optional source vis ----
     if args.render_source:
         if Settings.PROD:
-            mpl.rcParams["font.size"] = 25
+            mpl.rcParams["font.size"] = 45
         run_source_vis(df=df, out_dir=out_dir)
 
     print("\n[\033[32mInfo\033[0m] Done!")
