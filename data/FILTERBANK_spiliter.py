@@ -131,8 +131,32 @@ if __name__ == "__main__":
     # HD-180617_M04:
     python FILTERBANK_spiliter.py --f_start 1404.0 --f_stop 1404.1 --output_dir ./33exoplanets/ /data/Raid0/obs_data/33exoplanets/xx/HD-180617_M04_pol1.fil
     python FILTERBANK_spiliter.py --f_start 1404.0 --f_stop 1404.1 --output_dir ./33exoplanets/ /data/Raid0/obs_data/33exoplanets/yy/HD-180617_M04_pol2.fil
-    
+
     for many files in linux:
+
+for f in /data/Raid0/obs_data/33exoplanets/*/Gliese-486_M*; do
+  python FILTERBANK_spiliter.py \
+    --f_start 1152.1435 \
+    --f_stop 1152.1450 \
+    --output_dir ./33exoplanets/ \
+    "$f"
+done
+
+for f in /data/Raid0/obs_data/33exoplanets/*/Kepler-438_M*; do
+  python FILTERBANK_spiliter.py \
+    --f_start 1319.99887 \
+    --f_stop 1320.00087 \
+    --output_dir ./33exoplanets/ \
+    "$f"
+done
+
+for f in /data/Raid0/obs_data/33exoplanets/*/K2-155_M*; do
+  python FILTERBANK_spiliter.py \
+    --f_start 1148.415 \
+    --f_stop 1148.418 \
+    --output_dir ./33exoplanets/ \
+    "$f"
+done
 
 for f in /data/Raid0/obs_data/33exoplanets/*/*M{08,10,12,14,16,18}*; do
   python FILTERBANK_spiliter.py \

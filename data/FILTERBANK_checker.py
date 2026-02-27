@@ -68,6 +68,8 @@ python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1139
 python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1140.50-1140.70.fil 1140.60352 1140.60448
 python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1140.50-1140.70.fil 1140.60376 1140.60424
 python data/FILTERBANK_checker.py data/33exoplanets/yy/Kepler-438_M01_pol2_f1140.50-1140.70.fil 1140.50 1140.70
+python data/FILTERBANK_checker.py data/33exoplanets/xx/tmp/Gliese-486_M01_pol1_f1152.14-1152.15.fil 1152.142 1152.145
+
 
 HD-180617_M04 xx:
 python FILTERBANK_checker.py /media/rikoneko/4c8904cd-457e-43a8-81d8-e3f5c0e60128/xx/HD-180617_M04_pol1.fil 1404.0496 1404.0504
