@@ -1,20 +1,20 @@
-# MSWNet: A Full SETI Dynamic-Spectrum Pipeline
+# waveSETI: A Wavelet-assisted SETI Search Pipeline
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-ee4c2c)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-This repository should be understood as a **full end-to-end pipeline** for SETI-style radio dynamic-spectrum analysis, not just as a model repository.
+This repository provides an implementation of a SETI-oriented pipeline for radio dynamic-spectrum analysis and narrowband drifting candidate search.
 
-`MSWNet` is one important component, but the actual workflow in this codebase includes:
+The pipeline combines a **Multi-Scale Wavelet Network (MSWNet)** with supporting utilities for data preparation, training, observation-level inference, candidate extraction, and post-processing. The workflow in this codebase includes:
 
 1. Downloading, checking, and slicing `.fil` / `.h5` observation data
 2. Generating synthetic training samples with `setigen`, optionally mixed with real filterbank backgrounds
-3. Training `MSWNet` / `UNet` variants with checkpoint resume support
+3. Training `Multi-Scale Wavelet Network (MSWNet)` / `UNet` variants with checkpoint resume support
 4. Running patch-wise inference on real observations, including dual-polarization handling
 5. Exporting candidate hits and applying post-processing such as stitching, threshold filtering, and on-off veto
 
-The core model is already public. The public repository link is [Riko-Neko/MSWNet](https://github.com/Riko-Neko/MSWNet). The main implementations in this repository are under [`model/`](model/).
+The repository is available at [Riko-Neko/waveseti](https://github.com/Riko-Neko/waveseti). The main neural-network implementations are under [`model/`](model/), and the observation-level inference utilities are under [`pipeline/`](pipeline/).
 
 ## Pipeline Overview
 
