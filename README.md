@@ -533,7 +533,7 @@ If you want to cite the repository itself, you can currently use:
 @software{mswnet_repo,
   author = {Riko-Neko},
   title = {MSWNet},
-  url = {https://github.com/Riko-Neko/MSWNet},
+  url = {https://github.com/Riko-Neko/waveseti},
   year = {2026}
 }
 ```

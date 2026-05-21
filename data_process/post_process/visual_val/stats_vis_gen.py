@@ -50,7 +50,7 @@ if Settings.PROD:
     if not any("Times New Roman" in f.name for f in fm.fontManager.ttflist):
         print("[\033[33mWarning\033[0m] Fonts 'Times New Roman' not found, falling back to 'Serif'")
         mpl.rcParams["font.family"] = "Liberation Serif"
-    mpl.rcParams["font.size"] = 15
+    mpl.rcParams["font.size"] = 25
     mpl.rcParams["font.weight"] = "semibold"
     mpl.rcParams["axes.titleweight"] = "bold"
     mpl.rcParams["axes.labelweight"] = "bold"
@@ -103,7 +103,7 @@ DEFAULT_XX_DIR = "/data/Raid0/obs_data/33exoplanets/xx/"
 # Window config
 FIXED_W2_MHZ = 0.00192
 DEFAULT_DPI = 300
-DEFAULT_FMT = ("pdf")
+DEFAULT_FMT = ("png")
 VMIN_PCT = 2.0
 VMAX_PCT = 98.0
 FIGSIZE = (20, 8)
@@ -269,20 +269,31 @@ def plot_freq_snr_scatter(freq_mhz: np.ndarray, snr: np.ndarray, groups: np.ndar
     # plot each group separately for consistent legend
     for g in uniq:
         idx = groups == g
-        ax.scatter(freq_mhz[idx], snr[idx], s=30, alpha=0.85, label=g, c=[colors[g]], edgecolors="none", )
+        ax.scatter(
+            freq_mhz[idx],
+            snr[idx],
+            s=(60 if Settings.PROD else 30),
+            alpha=0.85,
+            label=g,
+            c=[colors[g]],
+            edgecolors="none",
+        )
 
     # highlight candidate(s)
     if candidate_mask is not None and np.any(candidate_mask):
-        ax.scatter(freq_mhz[candidate_mask], snr[candidate_mask], s=140, marker="*", color="red",
+        ax.scatter(freq_mhz[candidate_mask], snr[candidate_mask], s=(280 if Settings.PROD else 140), marker="*", color="red",
                    edgecolors="black", zorder=5, label=candidate_label)
 
-    ax.set_xlabel("Uncorrected Frequency (MHz)")
-    ax.set_ylabel("SNR")
-    ax.set_title("Uncorrected Frequency vs SNR" if Settings.PROD else f"Uncorrected Frequency vs SNR (groups={n_g})")
+    label_size = 30 if Settings.PROD else None
+    ax.set_xlabel("Uncorrected Frequency (MHz)", fontsize=label_size)
+    ax.set_ylabel("S/N" if Settings.PROD else "SNR", fontsize=label_size)
+    ax.set_title("Uncorrected Frequency vs S/N" if Settings.PROD else f"Uncorrected Frequency vs SNR (groups={n_g})")
+    if Settings.PROD:
+        ax.tick_params(axis="both", labelsize=24)
 
     # legend strategy: avoid unreadable mega-legend
     if n_g <= 20:
-        ax.legend(loc="best", fontsize=12, frameon=False)
+        ax.legend(loc="best", fontsize=(18 if Settings.PROD else 12), frameon=False)
     else:
         # Too many groups: show no legend, but save mapping
         ax.text(0.99, 0.01, f"Legend suppressed (groups={n_g} > 20). See group_color_map.csv", transform=ax.transAxes,
@@ -325,9 +336,16 @@ def plot_deltaf_scan(freq_mhz: np.ndarray, out_path: Path, *, df_min_hz: float, 
     ax.set_ylabel("Rayleigh locking statistic R(Δf)")
     ax.set_title("Δf Scan")
 
-    ax.xaxis.set_major_locator(mticker.MultipleLocator(GRID_STEP))
-    ax.grid(True, which="major", axis="x", alpha=0.3)
-    ax.grid(True, which="major", alpha=0.3)
+    if Settings.PROD:
+        ax.xaxis.set_major_locator(mticker.MultipleLocator(GRID_STEP * 2.0))
+        ax.xaxis.set_minor_locator(mticker.MultipleLocator(GRID_STEP))
+        ax.grid(True, which="minor", axis="x", alpha=0.22)
+        ax.grid(True, which="major", axis="x", alpha=0.35)
+        ax.grid(True, which="major", axis="y", alpha=0.3)
+    else:
+        ax.xaxis.set_major_locator(mticker.MultipleLocator(GRID_STEP))
+        ax.grid(True, which="major", axis="x", alpha=0.3)
+        ax.grid(True, which="major", alpha=0.3)
 
     # mark known engineering frequencies if provided
     if mark_known is not None:
@@ -340,11 +358,11 @@ def plot_deltaf_scan(freq_mhz: np.ndarray, out_path: Path, *, df_min_hz: float, 
     R_best = R_vals[idx_max]
 
     x_best = df_best * 1e-3
-    y_offset = 0.02 * (ax.get_ylim()[1] - ax.get_ylim()[0])
+    y_offset = (0.01 if Settings.PROD else 0.02) * (ax.get_ylim()[1] - ax.get_ylim()[0])
     x_offset = 0.005 * (ax.get_xlim()[1] - ax.get_xlim()[0])
-    ax.scatter(x_best, R_best, s=180, color="red", edgecolor="black", zorder=5, marker="*")
+    ax.scatter(x_best, R_best, s=(340 if Settings.PROD else 180), color="red", edgecolor="black", zorder=5, marker="*")
     ax.text(df_best * 1e-3 + x_offset, R_best - y_offset, f"  Δf = {df_best * 1e-3:.4f} kHz, R = {R_best:.4f}",
-            verticalalignment="bottom")
+            verticalalignment=("top" if Settings.PROD else "bottom"))
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=DEFAULT_DPI, bbox_inches="tight")
@@ -396,7 +414,7 @@ def plot_modf_residual(freq_mhz: np.ndarray, groups: np.ndarray, delta_f_mhz: fl
     cmap = plt.get_cmap("tab20")
     colors = {g: cmap(i % 20) for i, g in enumerate(uniq)}
 
-    fig = plt.figure(figsize=(9, 9))
+    fig = plt.figure(figsize=((8, 14) if Settings.PROD else (9, 9)))
     ax = fig.add_subplot(111)
 
     # plot each group separately
@@ -405,25 +423,34 @@ def plot_modf_residual(freq_mhz: np.ndarray, groups: np.ndarray, delta_f_mhz: fl
         if np.count_nonzero(idx) == 0:
             continue
         ax.scatter(r_khz[idx], freq_mhz[idx],
-                   s=30, alpha=0.85, label=g,
+                   s=(60 if Settings.PROD else 30), alpha=0.85, label=g,
                    c=[colors[g]], edgecolors="none")
 
     # highlight candidate(s)
     if candidate_mask is not None and np.any(candidate_mask):
-        ax.scatter(r_khz[candidate_mask], freq_mhz[candidate_mask], s=140, marker="*", color="red", edgecolors="black",
+        ax.scatter(r_khz[candidate_mask], freq_mhz[candidate_mask], s=(280 if Settings.PROD else 140), marker="*", color="red", edgecolors="black",
                    zorder=5, label=candidate_label)
 
     ax.set_xlim(r_min_khz, r_max_khz)
-    ax.set_xlabel(rf"Wrapped residual $r(f)$ (kHz), $\Delta f$={df * 1e3:.3f} kHz")
-    ax.set_ylabel("Uncorrected Frequency (MHz)")
+    label_size = 30 if Settings.PROD else None
+    bottom_label_size = 24 if Settings.PROD else None
+    tick_size = 24 if Settings.PROD else None
+    ax.set_xlabel(rf"Wrapped residual $r(f)$ (kHz), $\Delta f$={df * 1e3:.3f} kHz", fontsize=bottom_label_size)
+    ax.set_ylabel("Uncorrected Frequency (MHz)", fontsize=label_size)
+    if Settings.PROD:
+        ax.tick_params(axis="both", labelsize=tick_size)
 
-    title = rf"Comb test via residual/phase locking ($f \approx f_0 + k\Delta f$), $f_0$={float(f0_mhz):.6f} MHz"
+    title = (
+        rf"Comb test via residual/phase locking"
+        + ("\n" if Settings.PROD else " ")
+        + rf"($f \approx f_0 + k\Delta f$), $f_0$={float(f0_mhz):.6f} MHz"
+    )
     ax.set_title(title if Settings.PROD else f"{title} (groups={n_g}, N={len(freq_mhz)})")
     ax.grid(True, alpha=0.25)
 
     # legend strategy: same as your style
     if n_g <= 20:
-        ax.legend(loc="best", fontsize=12, frameon=False)
+        ax.legend(loc="best", fontsize=(18 if Settings.PROD else 12), frameon=False)
     else:
         ax.text(0.99, 0.01, f"Legend suppressed (groups={n_g} > 20). See group_color_map.csv",
                 transform=ax.transAxes, ha="right", va="bottom")
@@ -438,7 +465,9 @@ def plot_modf_residual(freq_mhz: np.ndarray, groups: np.ndarray, delta_f_mhz: fl
     tick_pos_khz = (df * 1e3) * (np.array(theta_ticks) / (2.0 * np.pi))
     ax_top.set_xticks(tick_pos_khz)
     ax_top.set_xticklabels(theta_ticklabels)
-    ax_top.set_xlabel(r"Phase residual $\theta$ (rad)")
+    ax_top.set_xlabel(r"Phase residual $\theta$ (rad)", fontsize=label_size)
+    if Settings.PROD:
+        ax_top.tick_params(axis="x", labelsize=tick_size)
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=DEFAULT_DPI, bbox_inches="tight")
